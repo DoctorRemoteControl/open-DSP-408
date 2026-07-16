@@ -35,8 +35,12 @@ This bundle exposes `DspService` through an OSGi HTTP Whiteboard servlet. It is 
 - `POST /api/v1/device/login`
 - `POST /api/v1/preset/load`
 - `POST /api/v1/preset/name/read`
+- `POST /api/v1/preset/validate`
+- `POST /api/v1/preset/apply`
 - `GET /api/v1/channels`
 - `GET /api/v1/channels/{channelId}`
+- `GET /api/v1/channels/{channelId}/gate`
+- `GET /api/v1/channels/{channelId}/meter`
 - `POST /api/v1/channels/{channelId}/name`
 - `POST /api/v1/channels/{channelId}/gain`
 - `POST /api/v1/channels/{channelId}/mute`
@@ -61,11 +65,14 @@ This bundle exposes `DspService` through an OSGi HTTP Whiteboard servlet. It is 
 - `POST /api/v1/channels/{channelId}/geq/{bandIndex}/gain`
 - `POST /api/v1/channels/{channelId}/gate`
 - `POST /api/v1/channels/{channelId}/gate/{threshold|hold|attack|release}`
+- `GET /api/v1/channels/{inputId}/compressor`
 - `POST /api/v1/channels/{channelId}/compressor`
+- `GET /api/v1/channels/{outputId}/limiter`
 - `POST /api/v1/channels/{channelId}/limiter`
 - `POST /api/v1/test-tone/source`
 - `POST /api/v1/test-tone/sine`
 - `POST /api/v1/test-tone/off`
+- `GET /api/v1/meters`
 - `POST /api/v1/meters/read`
 - `GET /api/v1/blocks`
 - `GET /api/v1/blocks/{blockIndex}`
@@ -102,6 +109,91 @@ curl -X POST http://localhost:8181/api/v1/dsps/main/channels/out2/gain \
   -H "Content-Type: application/json" \
   -d "{\"db\": 0.0}"
 ```
+
+## JSON Presets
+
+A complete JSON preset can be validated without changing the DSP:
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  --data-binary "@preset.json" \
+  http://localhost:8181/api/v1/dsps/fir408/preset/validate
+```
+
+Apply the same file:
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  --data-binary "@preset.json" \
+  http://localhost:8181/api/v1/dsps/fir408/preset/apply
+```
+
+Preset apply safety behavior:
+
+- the complete document is validated before the first DSP write
+- all four inputs and all eight outputs are muted first
+- `unmuteAfterApply` is ignored by default
+- `?unmuteSelected=true` explicitly enables marked channels after every other operation succeeds
+- `?refresh=false` skips the final parameter-block scan
+- if an operation fails, the server attempts to mute all twelve channels again
+
+The document must contain exactly `ina..ind` and `out1..out8`. It supports
+channel names, gain, phase, delay, FIR/IIR mode, zero to four matrix sources
+with an independent crosspoint gain per source, HP/LP crossover and output
+limiter settings. The legacy singular `route` field remains supported; use
+`routes` for sums such as `InA + InB`.
+Unknown DSP fields are rejected with HTTP 422 so that unsupported sections are
+not silently ignored.
+
+On FIR408, normal write endpoints are also checked against the protocol
+library evidence before any network payload is sent. Unverified operations
+return HTTP `409` with `error: "unsupported_operation"`. This applies equally
+to direct HTTP calls, shell commands, Matrix commands and JSON preset
+operations because the check is implemented in the shared controller.
+
+The `/raw` endpoint deliberately bypasses this protection and is intended only
+for explicit protocol diagnostics.
+
+PowerShell example:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -ContentType "application/json" `
+  -InFile .\preset.json `
+  -Uri "http://localhost:8181/api/v1/dsps/fir408/preset/apply"
+```
+
+Read the last cached meter values:
+
+```bash
+curl http://localhost:8181/api/v1/meters
+curl http://localhost:8181/api/v1/channels/out1/meter
+```
+
+Request a fresh meter frame and return the updated state:
+
+```bash
+curl -X POST http://localhost:8181/api/v1/meters/read
+```
+
+Each meter channel contains the raw two-byte word, the unknown third slot byte
+as `aux`, the calibrated `levelDb` value and the runtime `limiterActive` flag
+for output channels. The level conversion is empirically calibrated against
+the FIR408 internal 1 kHz sine and is limited to `-60 dB` below the observed
+meter range.
+
+Channel responses also expose `phaseInverted` and `delayMs` together with
+independent `phaseConfirmedFromDevice`, `delayConfirmedFromDevice`, dirty-state
+and last-update-source fields. On FIR408, phase is device-confirmed for all
+twelve channels from the observed block map.
+
+`GET /api/v1/state` includes `inputGates`, `inputCompressors` and `limiters`.
+On FIR408, the original GUI values and the live block dump confirm the four
+input gates, four input compressors and eight output limiters. Each DTO keeps
+its per-field device-confirmation and update-source information.
 
 ## Build
 

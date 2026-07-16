@@ -71,6 +71,8 @@ final class MatrixDspCommandDispatcher {
             case "loadpreset" -> loadPreset(service, args);
             case "readpresetname" -> json(service.readPresetName(intArg(args, 0, "Usage: !dsp readpresetname <0..19>")));
             case "meters" -> json(service.requestRuntimeMeters());
+            case "meterstate", "meterscached" -> json(service.getMeters());
+            case "meter" -> json(service.getMeter(arg(args, 0, "Usage: !dsp meter <channel>")));
             case "blocks" -> json(service.getCachedBlockIndices());
             case "readblock" -> json(service.readBlock(arg(args, 0, "Usage: !dsp readblock <hex>")));
             case "showblock", "block" -> json(service.getCachedBlock(arg(args, 0, "Usage: !dsp showblock <hex>")));
@@ -115,7 +117,7 @@ final class MatrixDspCommandDispatcher {
             case "gatehold" -> json(service.setInputGateHold(arg(args, 0, "Usage: !dsp gatehold <in> <holdMs>"), doubleArg(args, 1, "Usage: !dsp gatehold <in> <holdMs>")));
             case "gateattack" -> json(service.setInputGateAttack(arg(args, 0, "Usage: !dsp gateattack <in> <attackMs>"), doubleArg(args, 1, "Usage: !dsp gateattack <in> <attackMs>")));
             case "gaterelease" -> json(service.setInputGateRelease(arg(args, 0, "Usage: !dsp gaterelease <in> <releaseMs>"), doubleArg(args, 1, "Usage: !dsp gaterelease <in> <releaseMs>")));
-            case "compset" -> json(service.setCompressor(arg(args, 0, "Usage: !dsp compset <out> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), doubleArg(args, 1, "Usage: !dsp compset <out> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), arg(args, 2, "Usage: !dsp compset <out> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), doubleArg(args, 3, "Usage: !dsp compset <out> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), doubleArg(args, 4, "Usage: !dsp compset <out> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), doubleArg(args, 5, "Usage: !dsp compset <out> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>")));
+            case "compset" -> json(service.setCompressor(arg(args, 0, "Usage: !dsp compset <in> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), doubleArg(args, 1, "Usage: !dsp compset <in> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), arg(args, 2, "Usage: !dsp compset <in> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), doubleArg(args, 3, "Usage: !dsp compset <in> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), doubleArg(args, 4, "Usage: !dsp compset <in> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>"), doubleArg(args, 5, "Usage: !dsp compset <in> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>")));
             case "compget", "limitget" -> service.executeMatrix("!dsp " + cmd + " " + join(args), true);
             case "limitset" -> json(service.setLimiter(arg(args, 0, "Usage: !dsp limitset <out> <thresholdDb> <attackMs> <releaseMs>"), doubleArg(args, 1, "Usage: !dsp limitset <out> <thresholdDb> <attackMs> <releaseMs>"), doubleArg(args, 2, "Usage: !dsp limitset <out> <thresholdDb> <attackMs> <releaseMs>"), doubleArg(args, 3, "Usage: !dsp limitset <out> <thresholdDb> <attackMs> <releaseMs>")));
             case "tone", "toneon", "tonefreq" -> json(service.setTestToneSineFrequency(doubleArg(args, 0, "Usage: !dsp tone <hz>")));
@@ -178,7 +180,8 @@ final class MatrixDspCommandDispatcher {
 
                 Multi-DSP: dsps, dsp <dsp-id> <command>
                 Connection: connect, disconnect, reconnect, connected
-                State: state, status, channels, get <channel>, deviceinfo, meters
+                State: state, status, channels, get <channel>, deviceinfo
+                Meters: meters (read DSP), meterstate (cached), meter <channel> (cached)
                 Device: login <1234>, loadpreset <F00|U01..U20|0..20>, readpresetname <0..19>
                 Blocks: blocks, readblock <hex>, showblock <hex>, scanblocks, refresh
                 Channel: gain <channel> <db>, mute <channel>, unmute <channel>, name <channel> <name>, phase <channel> <0|180>, delay <channel> <ms>, delayunit <ms|m|ft>

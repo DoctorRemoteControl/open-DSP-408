@@ -25,6 +25,7 @@
         <karaf.version>4.4.10</karaf.version>
         <bnd.version>7.0.0</bnd.version>
         <jackson.version>2.17.2</jackson.version>
+        <junit.version>5.10.3</junit.version>
         <slf4j.version>2.0.13</slf4j.version>
         <osgi.ds.annotations.version>1.5.1</osgi.ds.annotations.version>
         <osgi.metatype.annotations.version>1.4.1</osgi.metatype.annotations.version>
@@ -84,6 +85,13 @@
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
                 <version>${jackson.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>

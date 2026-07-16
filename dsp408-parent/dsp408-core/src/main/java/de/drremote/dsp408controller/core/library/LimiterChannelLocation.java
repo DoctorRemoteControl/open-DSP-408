@@ -6,7 +6,7 @@ public record LimiterChannelLocation(
         DspChannel channel,
         PeqFieldLocation attack,
         PeqFieldLocation release,
-        PeqFieldLocation unknown,
+        PeqFieldLocation knee,
         PeqFieldLocation threshold
 ) {
 }

@@ -21,7 +21,10 @@ public final class MuteBlockDecoder implements BlockDecoder {
 
     @Override
     public void decode(int blockIndex, byte[] data) {
-        if (spec == null || data == null || blockIndex != spec.blockIndex()) {
+        if (spec == null
+                || !spec.confirmedFromDevice()
+                || data == null
+                || blockIndex != spec.blockIndex()) {
             return;
         }
 

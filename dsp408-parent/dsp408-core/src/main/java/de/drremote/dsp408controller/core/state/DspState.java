@@ -54,10 +54,10 @@ public final class DspState {
                 inputPeqs.put(channel, new InputPeqState(channel));
                 inputGates.put(channel, new InputGateState(channel));
                 inputGeqs.put(channel, new InputGeqState(channel));
+                compressors.put(channel, new CompressorState(channel));
             } else {
                 matrixOutputs.put(channel, new MatrixOutputState(channel));
                 outputPeqs.put(channel, new OutputPeqState(channel));
-                compressors.put(channel, new CompressorState(channel));
                 limiters.put(channel, new LimiterState(channel));
             }
         }
@@ -103,8 +103,8 @@ public final class DspState {
         return crossovers.get(channel);
     }
 
-    public synchronized CompressorState compressor(DspChannel output) {
-        return compressors.get(output);
+    public synchronized CompressorState compressor(DspChannel channel) {
+        return compressors.get(channel);
     }
 
     public synchronized LimiterState limiter(DspChannel output) {
@@ -130,7 +130,7 @@ public final class DspState {
         }
 
         for (MatrixOutputState state : matrixOutputs.values()) {
-            if (state.routedInput() != null) {
+            if (!state.routedInputsSnapshot().isEmpty()) {
                 return true;
             }
             for (Double value : state.crosspointGainsSnapshot().values()) {
@@ -236,9 +236,13 @@ public final class DspState {
     }
 
     public synchronized void markMatrixRoute(DspChannel output, DspChannel input) {
+        markMatrixRoutes(output, java.util.List.of(input));
+    }
+
+    public synchronized void markMatrixRoutes(DspChannel output, java.util.Collection<DspChannel> inputs) {
         MatrixOutputState state = matrixOutputs.get(output);
         if (state != null) {
-            state.setRoutedInput(input);
+            state.setRoutedInputs(inputs);
         }
     }
 
@@ -273,6 +277,8 @@ public final class DspState {
                                                      double gainDb,
                                                      double frequencyHz,
                                                      double q,
+                                                     PeqFilterType filterType,
+                                                     boolean bypass,
                                                      String source) {
         OutputPeqState state = outputPeqs.get(output);
         if (state == null) {
@@ -283,6 +289,8 @@ public final class DspState {
         band.updateGain(gainDb, source, true);
         band.updateFrequency(frequencyHz, source, true);
         band.updateQ(q, source, true);
+        band.updateFilterType(filterType, source, true);
+        band.updateBypass(bypass, source, true);
     }
 
     public synchronized void markInputPeqBand(DspChannel input,
@@ -449,10 +457,14 @@ public final class DspState {
                                                       int ratioIndex,
                                                       String ratioLabel,
                                                       double attackMs,
-                                                      double releaseMs,
-                                                      double kneeDb,
-                                                      double thresholdDb,
-                                                      String source) {
+                                                       double releaseMs,
+                                                       double kneeDb,
+                                                       double thresholdDb,
+                                                       double frequencyHz,
+                                                       int typeContextRaw,
+                                                       int typeRaw,
+                                                       String typeLabel,
+                                                       String source) {
         CompressorState state = compressors.get(output);
         if (state == null) {
             return;
@@ -463,6 +475,9 @@ public final class DspState {
         state.updateRelease(releaseMs, source, true);
         state.updateKnee(kneeDb, source, true);
         state.updateThreshold(thresholdDb, source, true);
+        state.updateFrequency(frequencyHz, source, true);
+        state.updateTypeContext(typeContextRaw, source, true);
+        state.updateType(typeRaw, typeLabel, source, true);
     }
 
     public synchronized void markCompressor(DspChannel output,
@@ -472,6 +487,10 @@ public final class DspState {
                                             double releaseMs,
                                             double kneeDb,
                                             double thresholdDb,
+                                            double frequencyHz,
+                                            int typeContextRaw,
+                                            int typeRaw,
+                                            String typeLabel,
                                             String source) {
         CompressorState state = compressors.get(output);
         if (state == null) {
@@ -483,12 +502,15 @@ public final class DspState {
         state.updateRelease(releaseMs, source, false);
         state.updateKnee(kneeDb, source, false);
         state.updateThreshold(thresholdDb, source, false);
+        state.updateFrequency(frequencyHz, source, false);
+        state.updateTypeContext(typeContextRaw, source, false);
+        state.updateType(typeRaw, typeLabel, source, false);
     }
 
     public synchronized void markLimiterFromDevice(DspChannel output,
                                                    double attackMs,
                                                    double releaseMs,
-                                                   int unknownValue,
+                                                   double kneeDb,
                                                    double thresholdDb,
                                                    String source) {
         LimiterState state = limiters.get(output);
@@ -498,14 +520,14 @@ public final class DspState {
 
         state.updateAttack(attackMs, source, true);
         state.updateRelease(releaseMs, source, true);
-        state.updateUnknown(unknownValue, source, true);
+        state.updateKnee(kneeDb, source, true);
         state.updateThreshold(thresholdDb, source, true);
     }
 
     public synchronized void markLimiter(DspChannel output,
                                          double attackMs,
                                          double releaseMs,
-                                         int unknownValue,
+                                         double kneeDb,
                                          double thresholdDb,
                                          String source) {
         LimiterState state = limiters.get(output);
@@ -515,7 +537,7 @@ public final class DspState {
 
         state.updateAttack(attackMs, source, false);
         state.updateRelease(releaseMs, source, false);
-        state.updateUnknown(unknownValue, source, false);
+        state.updateKnee(kneeDb, source, false);
         state.updateThreshold(thresholdDb, source, false);
     }
 

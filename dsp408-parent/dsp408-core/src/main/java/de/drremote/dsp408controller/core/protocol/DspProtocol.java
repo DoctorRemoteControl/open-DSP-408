@@ -319,8 +319,20 @@ public final class DspProtocol {
     }
 
     public static byte[] buildMatrixRoute(DspChannel output, DspChannel input) {
+        return buildMatrixRoutes(output, java.util.List.of(input));
+    }
+
+    public static byte[] buildMatrixRoutes(DspChannel output, java.util.Collection<DspChannel> inputs) {
         checkOutputChannel(output);
-        checkInputChannel(input);
+        if (inputs == null) {
+            throw new IllegalArgumentException("Matrix inputs are required");
+        }
+
+        int inputMask = 0;
+        for (DspChannel input : inputs) {
+            checkInputChannel(input);
+            inputMask |= matrixInputMask(input);
+        }
 
         return new byte[]{
                 0x00,
@@ -328,7 +340,7 @@ public final class DspProtocol {
                 0x03,
                 CMD_SET_MATRIX_ROUTE,
                 (byte) output.index(),
-                (byte) matrixInputMask(input)
+                (byte) inputMask
         };
     }
 
@@ -736,36 +748,86 @@ public final class DspProtocol {
     public static byte[] buildLimiter(DspChannel output,
                                       double attackMs,
                                       double releaseMs,
-                                      int unknownRaw,
+                                      int kneeRaw,
                                       double thresholdDb) {
         int attackRaw = DspCodecRegistry.dynamicsTimeMsToRaw(attackMs, 1.0, 999.0);
         int releaseRaw = DspCodecRegistry.dynamicsTimeMsToRaw(releaseMs, 10.0, 3000.0);
         int thresholdRaw = DspCodecRegistry.dynamicsThresholdDbToRaw(thresholdDb, -90.0, 20.0);
-        return buildLimiter(output, attackRaw, releaseRaw, unknownRaw, thresholdRaw);
+        return buildLimiter(output, attackRaw, releaseRaw, kneeRaw, thresholdRaw);
     }
 
     public static byte[] buildLimiter(DspChannel output,
                                       int attackRaw,
                                       int releaseRaw,
-                                      int unknownRaw,
+                                      int kneeRaw,
                                       int thresholdRaw) {
         checkOutputChannel(output);
-        checkUInt16(unknownRaw, "Limiter unknown field");
+        checkUInt16(attackRaw, "Limiter attack");
+        checkUInt16(releaseRaw, "Limiter release");
+        checkUInt16(thresholdRaw, "Limiter threshold");
+
+        int ratioRaw = 0x0F;
+        int normalizedKneeRaw = clampInt(kneeRaw, 0, 12);
 
         return new byte[]{
                 0x00,
                 0x01,
-                0x0A,
+                0x0C,
                 CMD_SET_LIMITER,
                 (byte) output.index(),
+                (byte) ratioRaw,
+                0x00,
                 (byte) (attackRaw & 0xFF),
                 (byte) ((attackRaw >>> 8) & 0xFF),
                 (byte) (releaseRaw & 0xFF),
                 (byte) ((releaseRaw >>> 8) & 0xFF),
-                (byte) (unknownRaw & 0xFF),
-                (byte) ((unknownRaw >>> 8) & 0xFF),
+                (byte) (normalizedKneeRaw & 0xFF),
+                (byte) ((normalizedKneeRaw >>> 8) & 0xFF),
                 (byte) (thresholdRaw & 0xFF),
                 (byte) ((thresholdRaw >>> 8) & 0xFF)
+        };
+    }
+
+    public static byte[] buildInputCompressor(DspChannel input,
+                                              int ratioRaw,
+                                              int attackRaw,
+                                              int releaseRaw,
+                                              int kneeRaw,
+                                              int thresholdRaw,
+                                              int frequencyRaw,
+                                              int typeContextRaw,
+                                              int typeRaw) {
+        checkInputChannel(input);
+        checkCompressorRatioRaw(ratioRaw);
+        checkUInt16(attackRaw, "Input compressor attack");
+        checkUInt16(releaseRaw, "Input compressor release");
+        checkUInt16(thresholdRaw, "Input compressor threshold");
+        checkUInt16(frequencyRaw, "Input compressor frequency");
+
+        int normalizedKneeRaw = clampInt(kneeRaw, 0, 12);
+        int normalizedTypeContextRaw = clampInt(typeContextRaw, 0, 0xFF);
+        int normalizedTypeRaw = clampInt(typeRaw, 0, 9);
+
+        return new byte[]{
+                0x00,
+                0x01,
+                0x10,
+                CMD_SET_COMPRESSOR,
+                (byte) input.index(),
+                (byte) (ratioRaw & 0xFF),
+                0x00,
+                (byte) (attackRaw & 0xFF),
+                (byte) ((attackRaw >>> 8) & 0xFF),
+                (byte) (releaseRaw & 0xFF),
+                (byte) ((releaseRaw >>> 8) & 0xFF),
+                (byte) normalizedKneeRaw,
+                0x00,
+                (byte) (thresholdRaw & 0xFF),
+                (byte) ((thresholdRaw >>> 8) & 0xFF),
+                (byte) (frequencyRaw & 0xFF),
+                (byte) ((frequencyRaw >>> 8) & 0xFF),
+                (byte) normalizedTypeContextRaw,
+                (byte) normalizedTypeRaw
         };
     }
 

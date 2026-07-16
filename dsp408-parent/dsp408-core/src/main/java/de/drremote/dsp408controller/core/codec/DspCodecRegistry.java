@@ -25,20 +25,19 @@ public final class DspCodecRegistry {
     };
 
     public static final ValueCodec PEQ_FREQUENCY = new ValueCodec() {
-        private static final double MIN_HZ = 19.7;
+        private static final double MIN_HZ = 19.6875;
         private static final double MAX_HZ = 20160.0;
-        private static final double RAW_MAX = 300.0;
 
         @Override
         public double rawToDouble(int raw) {
             int clamped = Math.max(0, Math.min(300, raw));
-            return MIN_HZ * Math.pow(MAX_HZ / MIN_HZ, clamped / RAW_MAX);
+            return MIN_HZ * Math.pow(2.0, clamped / 30.0);
         }
 
         @Override
         public int doubleToRaw(double value) {
             double hz = clamp(value, MIN_HZ, MAX_HZ);
-            double raw = RAW_MAX * Math.log(hz / MIN_HZ) / Math.log(MAX_HZ / MIN_HZ);
+            double raw = 30.0 * Math.log(hz / MIN_HZ) / Math.log(2.0);
             int rounded = (int) Math.round(raw);
             return Math.max(0, Math.min(300, rounded));
         }
@@ -52,13 +51,19 @@ public final class DspCodecRegistry {
         @Override
         public double rawToDouble(int raw) {
             int clamped = Math.max(0, Math.min(100, raw));
-            return MIN_Q * Math.pow(MAX_Q / MIN_Q, clamped / RAW_MAX);
+            if (clamped == 100) {
+                return MAX_Q;
+            }
+            return MIN_Q * Math.pow(10.0, clamped / 40.0);
         }
 
         @Override
         public int doubleToRaw(double value) {
             double q = clamp(value, MIN_Q, MAX_Q);
-            double raw = RAW_MAX * Math.log(q / MIN_Q) / Math.log(MAX_Q / MIN_Q);
+            if (q >= MAX_Q) {
+                return 100;
+            }
+            double raw = 40.0 * Math.log10(q / MIN_Q);
             int rounded = (int) Math.round(raw);
             return Math.max(0, Math.min(100, rounded));
         }

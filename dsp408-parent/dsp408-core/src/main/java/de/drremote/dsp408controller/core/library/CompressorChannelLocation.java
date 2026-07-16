@@ -8,6 +8,9 @@ public record CompressorChannelLocation(
         PeqFieldLocation attack,
         PeqFieldLocation release,
         PeqFieldLocation knee,
-        PeqFieldLocation threshold
+        PeqFieldLocation threshold,
+        PeqFieldLocation frequency,
+        PeqFieldLocation typeContext,
+        PeqFieldLocation type
 ) {
 }

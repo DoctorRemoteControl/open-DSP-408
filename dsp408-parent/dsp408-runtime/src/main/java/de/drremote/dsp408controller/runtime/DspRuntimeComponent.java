@@ -21,9 +21,15 @@ import de.drremote.dsp408.api.ChannelDto;
 import de.drremote.dsp408.api.DeviceInfoDto;
 import de.drremote.dsp408.api.DspInstanceDto;
 import de.drremote.dsp408.api.DspService;
+import de.drremote.dsp408.api.InputCompressorDto;
+import de.drremote.dsp408.api.InputGateDto;
+import de.drremote.dsp408.api.LimiterDto;
+import de.drremote.dsp408.api.MeterDto;
+import de.drremote.dsp408.api.MeterStateDto;
 import de.drremote.dsp408.api.RawTxDto;
 import de.drremote.dsp408.api.StateDto;
 import de.drremote.dsp408controller.command.DspCommandProcessor;
+import de.drremote.dsp408controller.core.codec.DspCodecRegistry;
 import de.drremote.dsp408controller.core.net.DspConnectionConfig;
 import de.drremote.dsp408controller.core.net.DspFrameCodec;
 import de.drremote.dsp408controller.core.protocol.CrossoverSlope;
@@ -35,9 +41,13 @@ import de.drremote.dsp408controller.core.protocol.FirWindowFunction;
 import de.drremote.dsp408controller.core.protocol.PeqFilterType;
 import de.drremote.dsp408controller.core.service.DspController;
 import de.drremote.dsp408controller.core.state.ChannelState;
+import de.drremote.dsp408controller.core.state.CompressorState;
 import de.drremote.dsp408controller.core.state.CrossoverFilterState;
 import de.drremote.dsp408controller.core.state.InputGateState;
 import de.drremote.dsp408controller.core.state.LimiterState;
+import de.drremote.dsp408controller.core.state.MeterChannelState;
+import de.drremote.dsp408controller.core.state.MeterLevelDecoder;
+import de.drremote.dsp408controller.core.state.MeterState;
 import de.drremote.dsp408controller.core.state.PeqBandState;
 import de.drremote.dsp408controller.util.Hex;
 
@@ -259,6 +269,50 @@ public final class DspRuntimeComponent implements DspService {
     }
 
     @Override
+    public synchronized List<InputGateDto> getInputGates() {
+        return toInputGateDtos();
+    }
+
+    @Override
+    public synchronized List<InputCompressorDto> getInputCompressors() {
+        return toInputCompressorDtos();
+    }
+
+    @Override
+    public synchronized InputCompressorDto getInputCompressor(String channelId) {
+        DspChannel channel = DspChannel.parse(channelId);
+        if (channel.index() > DspChannel.IN_D.index()) {
+            throw new IllegalArgumentException("Input channel required: InA..InD");
+        }
+        return toInputCompressorDto(controller.state().compressor(channel));
+    }
+
+    @Override
+    public synchronized List<LimiterDto> getLimiters() {
+        return toLimiterDtos();
+    }
+
+    @Override
+    public synchronized LimiterDto getLimiter(String channelId) {
+        DspChannel channel = DspChannel.parse(channelId);
+        if (channel.index() < DspChannel.OUT_1.index()) {
+            throw new IllegalArgumentException("Output channel required: Out1..Out8");
+        }
+        return toLimiterDto(controller.state().limiter(channel));
+    }
+
+    @Override
+    public synchronized MeterStateDto getMeters() {
+        return toMeterStateDto();
+    }
+
+    @Override
+    public synchronized MeterDto getMeter(String channelId) {
+        DspChannel channel = DspChannel.parse(channelId);
+        return toMeterDto(controller.state().meterState().channel(channel));
+    }
+
+    @Override
     public synchronized ChannelDto setGain(String channelId, double db) throws Exception {
         DspChannel channel = DspChannel.parse(channelId);
         controller.setGain(channel, db);
@@ -273,7 +327,6 @@ public final class DspRuntimeComponent implements DspService {
     public synchronized ChannelDto mute(String channelId) throws Exception {
         DspChannel channel = DspChannel.parse(channelId);
         controller.mute(channel);
-        readBlockWithWait(0x1C);
         return toDto(controller.state().channel(channel));
     }
 
@@ -281,7 +334,6 @@ public final class DspRuntimeComponent implements DspService {
     public synchronized ChannelDto unmute(String channelId) throws Exception {
         DspChannel channel = DspChannel.parse(channelId);
         controller.unmute(channel);
-        readBlockWithWait(0x1C);
         return toDto(controller.state().channel(channel));
     }
 
@@ -380,10 +432,18 @@ public final class DspRuntimeComponent implements DspService {
 
     @Override
     public synchronized RawTxDto setMatrixRoute(String outputId, String inputId) throws Exception {
+        return setMatrixRoutes(outputId, List.of(inputId));
+    }
+
+    @Override
+    public synchronized RawTxDto setMatrixRoutes(String outputId, List<String> inputIds) throws Exception {
         DspChannel output = DspChannel.parse(outputId);
-        DspChannel input = DspChannel.parse(inputId);
-        controller.setMatrixRoute(output, input);
-        return buildRawTxDto(DspProtocol.buildMatrixRoute(output, input));
+        if (inputIds == null) {
+            throw new IllegalArgumentException("Matrix inputs are required");
+        }
+        List<DspChannel> inputs = inputIds.stream().map(DspChannel::parse).toList();
+        controller.setMatrixRoutes(output, inputs);
+        return buildRawTxDto(DspProtocol.buildMatrixRoutes(output, inputs));
     }
 
     @Override
@@ -642,11 +702,22 @@ public final class DspRuntimeComponent implements DspService {
     }
 
     @Override
-    public synchronized RawTxDto setCompressor(String outputId, double thresholdDb, String ratioLabel, double attackMs,
+    public synchronized RawTxDto setCompressor(String inputId, double thresholdDb, String ratioLabel, double attackMs,
                                                double releaseMs, double kneeDb) throws Exception {
-        DspChannel output = DspChannel.parse(outputId);
-        controller.setCompressor(output, thresholdDb, ratioLabel, attackMs, releaseMs, kneeDb);
-        return buildRawTxDto(DspProtocol.buildCompressor(output, ratioLabel, attackMs, releaseMs, kneeDb, thresholdDb));
+        DspChannel input = DspChannel.parse(inputId);
+        controller.setCompressor(input, thresholdDb, ratioLabel, attackMs, releaseMs, kneeDb);
+        CompressorState state = controller.state().compressor(input);
+        return buildRawTxDto(DspProtocol.buildInputCompressor(
+                input,
+                state.ratioIndex(),
+                DspCodecRegistry.dynamicsTimeMsToRaw(state.attackMs(), 1.0, 999.0),
+                DspCodecRegistry.dynamicsTimeMsToRaw(state.releaseMs(), 10.0, 3000.0),
+                (int) Math.round(state.kneeDb()),
+                DspCodecRegistry.dynamicsThresholdDbToRaw(state.thresholdDb(), -90.0, 20.0),
+                DspCodecRegistry.peqFrequency().doubleToRaw(state.frequencyHz()),
+                state.typeContextRaw(),
+                state.typeRaw()
+        ));
     }
 
     @Override
@@ -654,9 +725,12 @@ public final class DspRuntimeComponent implements DspService {
             throws Exception {
         DspChannel output = DspChannel.parse(outputId);
         LimiterState limiter = controller.state().limiter(output);
-        int unknownRaw = limiter == null || limiter.unknownValue() == null ? 0 : limiter.unknownValue();
+        int kneeRaw = limiter == null || limiter.kneeDb() == null ? 0 : (int) Math.round(limiter.kneeDb());
+        if (kneeRaw < 0 || kneeRaw > 12) {
+            kneeRaw = 0;
+        }
         controller.setLimiter(output, thresholdDb, attackMs, releaseMs);
-        return buildRawTxDto(DspProtocol.buildLimiter(output, attackMs, releaseMs, unknownRaw, thresholdDb));
+        return buildRawTxDto(DspProtocol.buildLimiter(output, attackMs, releaseMs, kneeRaw, thresholdDb));
     }
 
     @Override
@@ -745,12 +819,20 @@ public final class DspRuntimeComponent implements DspService {
                 channel.index(),
                 state.gainDb(),
                 state.muted(),
+                state.phaseInverted(),
+                state.delayMs(),
                 state.gainConfirmedFromDevice(),
                 state.muteConfirmedFromDevice(),
+                state.phaseConfirmedFromDevice(),
+                state.delayConfirmedFromDevice(),
                 state.gainDirty(),
                 state.muteDirty(),
+                state.phaseDirty(),
+                state.delayDirty(),
                 state.lastGainUpdateSource(),
-                state.lastMuteUpdateSource()
+                state.lastMuteUpdateSource(),
+                state.lastPhaseUpdateSource(),
+                state.lastDelayUpdateSource()
         );
     }
 
@@ -771,7 +853,155 @@ public final class DspRuntimeComponent implements DspService {
                 controller.isConnected(),
                 toDeviceInfoDto(),
                 getChannels(),
-                getCachedBlockIndices()
+                getCachedBlockIndices(),
+                toInputGateDtos(),
+                toInputCompressorDtos(),
+                toLimiterDtos(),
+                toMeterStateDto()
+        );
+    }
+
+    private List<InputGateDto> toInputGateDtos() {
+        return List.of(DspChannel.IN_A, DspChannel.IN_B, DspChannel.IN_C, DspChannel.IN_D).stream()
+                .map(channel -> toInputGateDto(controller.state().inputGate(channel)))
+                .toList();
+    }
+
+    private InputGateDto toInputGateDto(InputGateState gate) {
+        DspChannel channel = gate.input();
+        return new InputGateDto(
+                toChannelId(channel),
+                channel.displayName(),
+                channel.index(),
+                gate.thresholdDb(),
+                gate.holdMs(),
+                gate.attackMs(),
+                gate.releaseMs(),
+                gate.thresholdConfirmedFromDevice(),
+                gate.holdConfirmedFromDevice(),
+                gate.attackConfirmedFromDevice(),
+                gate.releaseConfirmedFromDevice(),
+                gate.lastThresholdUpdateSource(),
+                gate.lastHoldUpdateSource(),
+                gate.lastAttackUpdateSource(),
+                gate.lastReleaseUpdateSource()
+        );
+    }
+
+    private List<InputCompressorDto> toInputCompressorDtos() {
+        return List.of(DspChannel.IN_A, DspChannel.IN_B, DspChannel.IN_C, DspChannel.IN_D).stream()
+                .map(channel -> toInputCompressorDto(controller.state().compressor(channel)))
+                .toList();
+    }
+
+    private InputCompressorDto toInputCompressorDto(CompressorState compressor) {
+        DspChannel channel = compressor.channel();
+        return new InputCompressorDto(
+                toChannelId(channel),
+                channel.displayName(),
+                channel.index(),
+                compressor.ratioIndex(),
+                compressor.ratioLabel(),
+                compressor.attackMs(),
+                compressor.releaseMs(),
+                compressor.kneeDb(),
+                compressor.thresholdDb(),
+                compressor.frequencyHz(),
+                compressor.typeContextRaw(),
+                compressor.typeRaw(),
+                compressor.typeLabel(),
+                compressor.ratioConfirmedFromDevice(),
+                compressor.attackConfirmedFromDevice(),
+                compressor.releaseConfirmedFromDevice(),
+                compressor.kneeConfirmedFromDevice(),
+                compressor.thresholdConfirmedFromDevice(),
+                compressor.frequencyConfirmedFromDevice(),
+                compressor.typeContextConfirmedFromDevice(),
+                compressor.typeConfirmedFromDevice(),
+                compressor.lastRatioUpdateSource(),
+                compressor.lastAttackUpdateSource(),
+                compressor.lastReleaseUpdateSource(),
+                compressor.lastKneeUpdateSource(),
+                compressor.lastThresholdUpdateSource(),
+                compressor.lastFrequencyUpdateSource(),
+                compressor.lastTypeContextUpdateSource(),
+                compressor.lastTypeUpdateSource()
+        );
+    }
+
+    private List<LimiterDto> toLimiterDtos() {
+        return List.of(
+                DspChannel.OUT_1, DspChannel.OUT_2, DspChannel.OUT_3, DspChannel.OUT_4,
+                DspChannel.OUT_5, DspChannel.OUT_6, DspChannel.OUT_7, DspChannel.OUT_8
+        ).stream()
+                .map(channel -> toLimiterDto(controller.state().limiter(channel)))
+                .toList();
+    }
+
+    private LimiterDto toLimiterDto(LimiterState limiter) {
+        DspChannel channel = limiter.output();
+        return new LimiterDto(
+                toChannelId(channel),
+                channel.displayName(),
+                channel.index(),
+                limiter.attackMs(),
+                limiter.releaseMs(),
+                limiter.thresholdDb(),
+                limiter.kneeDb(),
+                limiter.runtimeActive(),
+                limiter.attackConfirmedFromDevice(),
+                limiter.releaseConfirmedFromDevice(),
+                limiter.thresholdConfirmedFromDevice(),
+                limiter.kneeConfirmedFromDevice(),
+                limiter.runtimeConfirmedFromDevice(),
+                limiter.lastAttackUpdateSource(),
+                limiter.lastReleaseUpdateSource(),
+                limiter.lastThresholdUpdateSource(),
+                limiter.lastKneeUpdateSource(),
+                limiter.lastRuntimeUpdateSource()
+        );
+    }
+
+    private MeterStateDto toMeterStateDto() {
+        MeterState meterState = controller.state().meterState();
+        return new MeterStateDto(
+                meterState.allChannels().stream()
+                        .map(this::toMeterDto)
+                        .toList(),
+                meterState.statusByteRaw(),
+                meterState.statusConfirmedFromDevice(),
+                meterState.lastStatusUpdateSource()
+        );
+    }
+
+    private MeterDto toMeterDto(MeterChannelState meter) {
+        if (meter == null) {
+            return null;
+        }
+
+        DspChannel channel = meter.channel();
+        LimiterState limiter = channel.index() >= DspChannel.OUT_1.index()
+                ? controller.state().limiter(channel)
+                : null;
+        Integer rawValue = meter.rawValue();
+
+        return new MeterDto(
+                toChannelId(channel),
+                channel.displayName(),
+                channel.index(),
+                meter.rawLowByte(),
+                meter.rawHighByte(),
+                rawValue,
+                rawValue == null ? null : MeterLevelDecoder.decodeDb(rawValue),
+                meter.slotByte2(),
+                limiter == null ? null : limiter.runtimeActive(),
+                meter.confirmedFromDevice(),
+                limiter != null && limiter.runtimeConfirmedFromDevice(),
+                controller.meterChannelMappingConfirmed(),
+                controller.meterLevelCalibrationConfirmed(),
+                limiter != null && controller.meterLimiterMappingConfirmed(),
+                meter.lastUpdateSource(),
+                limiter == null ? null : limiter.lastRuntimeUpdateSource()
         );
     }
 

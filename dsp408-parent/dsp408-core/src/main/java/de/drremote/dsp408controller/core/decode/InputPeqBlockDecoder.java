@@ -215,12 +215,7 @@ public final class InputPeqBlockDecoder implements BlockDecoder {
     }
 
     private static PeqFilterType decodeFilterType(int raw) {
-        return switch (raw) {
-            case 0x00 -> PeqFilterType.PEAK;
-            case 0x01 -> PeqFilterType.LOW_SHELF;
-            case 0x02 -> PeqFilterType.HIGH_SHELF;
-            default -> throw new IllegalArgumentException("Unsupported input PEQ filter type raw value: " + raw);
-        };
+        return PeqFilterType.fromRaw(raw);
     }
 
     private static Integer readUInt16LE(byte[] data, int offset) {

@@ -19,6 +19,15 @@ This bundle contains the stable service contract used by the other bundles. It d
 - `DspInstanceDto` - configured DSP instance summary for multi-DSP setups.
 - `StateDto` - current connection, device and channel summary.
 - `ChannelDto` - currently exposed per-channel state.
+- `InputGateDto` - input-gate values with independent device-confirmation and
+  update-source fields for threshold, hold, attack and release.
+- `InputCompressorDto` - FIR408 input-compressor values including frequency,
+  type and per-field device confirmation.
+- `LimiterDto` - persistent output-limiter values plus the runtime-active flag.
+- `MeterDto` - decoded runtime level and output limiter state, including separate
+  flags for physical payload receipt, channel-map trust, level calibration and
+  limiter-map trust.
+- `MeterStateDto` - all runtime meters plus the meter status byte.
 - `DeviceInfoDto` - device version and system info payload.
 - `BlockDto` - cached or freshly read parameter block.
 - `RawTxDto` - payload/frame hex returned by write operations.
@@ -34,7 +43,7 @@ This bundle contains the stable service contract used by the other bundles. It d
 - matrix routing and crosspoint gain
 - crossover high-pass and low-pass
 - output PEQ, input PEQ and input GEQ
-- input gate, output compressor and output limiter
+- input gate, FIR408 input compressor and output limiter
 - test tone generator
 - FIR408 processing mode, FIR generator and external FIR upload
 - multi-DSP listing and per-DSP service selection

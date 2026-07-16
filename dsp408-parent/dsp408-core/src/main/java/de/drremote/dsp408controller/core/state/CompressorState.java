@@ -3,7 +3,7 @@ package de.drremote.dsp408controller.core.state;
 import de.drremote.dsp408controller.core.protocol.DspChannel;
 
 public final class CompressorState {
-    private final DspChannel output;
+    private final DspChannel channel;
 
     private Integer ratioIndex;
     private String ratioLabel;
@@ -11,25 +11,39 @@ public final class CompressorState {
     private Double releaseMs;
     private Double kneeDb;
     private Double thresholdDb;
+    private Double frequencyHz;
+    private Integer typeContextRaw;
+    private Integer typeRaw;
+    private String typeLabel;
 
     private boolean ratioConfirmedFromDevice;
     private boolean attackConfirmedFromDevice;
     private boolean releaseConfirmedFromDevice;
     private boolean kneeConfirmedFromDevice;
     private boolean thresholdConfirmedFromDevice;
+    private boolean frequencyConfirmedFromDevice;
+    private boolean typeContextConfirmedFromDevice;
+    private boolean typeConfirmedFromDevice;
 
     private String lastRatioUpdateSource;
     private String lastAttackUpdateSource;
     private String lastReleaseUpdateSource;
     private String lastKneeUpdateSource;
     private String lastThresholdUpdateSource;
+    private String lastFrequencyUpdateSource;
+    private String lastTypeContextUpdateSource;
+    private String lastTypeUpdateSource;
 
-    public CompressorState(DspChannel output) {
-        this.output = output;
+    public CompressorState(DspChannel channel) {
+        this.channel = channel;
+    }
+
+    public synchronized DspChannel channel() {
+        return channel;
     }
 
     public synchronized DspChannel output() {
-        return output;
+        return channel;
     }
 
     public synchronized Integer ratioIndex() {
@@ -56,6 +70,22 @@ public final class CompressorState {
         return thresholdDb;
     }
 
+    public synchronized Double frequencyHz() {
+        return frequencyHz;
+    }
+
+    public synchronized Integer typeContextRaw() {
+        return typeContextRaw;
+    }
+
+    public synchronized Integer typeRaw() {
+        return typeRaw;
+    }
+
+    public synchronized String typeLabel() {
+        return typeLabel;
+    }
+
     public synchronized boolean ratioConfirmedFromDevice() {
         return ratioConfirmedFromDevice;
     }
@@ -74,6 +104,18 @@ public final class CompressorState {
 
     public synchronized boolean thresholdConfirmedFromDevice() {
         return thresholdConfirmedFromDevice;
+    }
+
+    public synchronized boolean frequencyConfirmedFromDevice() {
+        return frequencyConfirmedFromDevice;
+    }
+
+    public synchronized boolean typeContextConfirmedFromDevice() {
+        return typeContextConfirmedFromDevice;
+    }
+
+    public synchronized boolean typeConfirmedFromDevice() {
+        return typeConfirmedFromDevice;
     }
 
     public synchronized String lastRatioUpdateSource() {
@@ -96,13 +138,29 @@ public final class CompressorState {
         return lastThresholdUpdateSource;
     }
 
+    public synchronized String lastFrequencyUpdateSource() {
+        return lastFrequencyUpdateSource;
+    }
+
+    public synchronized String lastTypeContextUpdateSource() {
+        return lastTypeContextUpdateSource;
+    }
+
+    public synchronized String lastTypeUpdateSource() {
+        return lastTypeUpdateSource;
+    }
+
     public synchronized boolean hasAnyValues() {
         return ratioIndex != null
                 || ratioLabel != null
                 || attackMs != null
                 || releaseMs != null
                 || kneeDb != null
-                || thresholdDb != null;
+                || thresholdDb != null
+                || frequencyHz != null
+                || typeContextRaw != null
+                || typeRaw != null
+                || typeLabel != null;
     }
 
     public synchronized void updateRatio(Integer ratioIndex, String ratioLabel, String source, boolean confirmed) {
@@ -134,5 +192,24 @@ public final class CompressorState {
         this.thresholdDb = thresholdDb;
         this.lastThresholdUpdateSource = source;
         this.thresholdConfirmedFromDevice = confirmed;
+    }
+
+    public synchronized void updateFrequency(Double frequencyHz, String source, boolean confirmed) {
+        this.frequencyHz = frequencyHz;
+        this.lastFrequencyUpdateSource = source;
+        this.frequencyConfirmedFromDevice = confirmed;
+    }
+
+    public synchronized void updateTypeContext(Integer typeContextRaw, String source, boolean confirmed) {
+        this.typeContextRaw = typeContextRaw;
+        this.lastTypeContextUpdateSource = source;
+        this.typeContextConfirmedFromDevice = confirmed;
+    }
+
+    public synchronized void updateType(Integer typeRaw, String typeLabel, String source, boolean confirmed) {
+        this.typeRaw = typeRaw;
+        this.typeLabel = typeLabel;
+        this.lastTypeUpdateSource = source;
+        this.typeConfirmedFromDevice = confirmed;
     }
 }

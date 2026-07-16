@@ -53,6 +53,9 @@ Examples:
 ```text
 !dsp dsps
 !dsp status
+!dsp meters
+!dsp meterstate
+!dsp meter out1
 !dsp gain ina -6
 !dsp dsp fir408 state
 !dsp dsp normal408 gain out1 -6
@@ -119,6 +122,8 @@ Supported machine command families include:
 - `delay.unit.set`
 - `preset.*`
 - `meters.read`
+- `meters.get`
+- `meter.get`
 - `matrix.*`
 - `crossover.*`
 - `fir.mode.set`
@@ -134,6 +139,25 @@ Supported machine command families include:
 - `volume.command`
 
 `dspId` may be supplied either at the top level or inside `args`. If it is omitted, the default DSP is used.
+
+Meter commands:
+
+- `meters.read` sends a new meter request to the DSP.
+- `meters.get` returns the latest cached meter state.
+- `meter.get` returns one cached channel including `levelDb` and `limiterActive`.
+
+Example:
+
+```json
+{
+  "requestId": "meter-out1",
+  "dspId": "fir408",
+  "command": "meter.get",
+  "args": {
+    "channelId": "out1"
+  }
+}
+```
 
 Structured FIR408 example:
 
@@ -152,6 +176,11 @@ Structured FIR408 example:
   }
 }
 ```
+
+Normal Matrix commands use the shared FIR408 write-evidence gate. An
+unverified operation returns `Unsupported` without sending a DSP payload.
+Raw protocol commands, where enabled for administrators, deliberately bypass
+that protection and are only intended for controlled diagnostics.
 
 ## Build
 

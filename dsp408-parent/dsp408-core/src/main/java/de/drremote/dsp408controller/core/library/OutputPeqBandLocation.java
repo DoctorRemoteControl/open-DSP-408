@@ -7,6 +7,9 @@ public record OutputPeqBandLocation(
         int bandIndex,
         PeqFieldLocation gain,
         PeqFieldLocation frequency,
-        PeqFieldLocation q
+        PeqFieldLocation q,
+        PeqFieldLocation filterType,
+        PeqFieldLocation bypassMask,
+        int bypassBitIndex
 ) {
 }

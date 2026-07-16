@@ -26,6 +26,8 @@ import de.drremote.dsp408controller.core.protocol.PeqFilterType;
 import de.drremote.dsp408controller.util.Hex;
 
 public final class DspClient implements Closeable {
+    private static final long MIN_TRANSMIT_GAP_NANOS = TimeUnit.MILLISECONDS.toNanos(150);
+
     private final DspConnectionConfig config;
     private final Consumer<String> log;
 
@@ -38,6 +40,7 @@ public final class DspClient implements Closeable {
     private ScheduledExecutorService keepAliveExecutor;
     private ScheduledExecutorService meterPollExecutor;
     private volatile Consumer<byte[]> payloadListener;
+    private long lastTransmitNanos;
 
     public DspClient(DspConnectionConfig config, Consumer<String> log) {
         this.config = config;
@@ -72,6 +75,7 @@ public final class DspClient implements Closeable {
             socket = newSocket;
             in = newIn;
             out = newOut;
+            lastTransmitNanos = 0L;
             running.set(true);
 
             startReader();
@@ -218,6 +222,10 @@ public final class DspClient implements Closeable {
         sendPayload(DspProtocol.buildMatrixRoute(output, input));
     }
 
+    public void setMatrixRoutes(DspChannel output, java.util.Collection<DspChannel> inputs) throws IOException {
+        sendPayload(DspProtocol.buildMatrixRoutes(output, inputs));
+    }
+
     public void setMatrixCrosspointGain(DspChannel output, DspChannel input, double db) throws IOException {
         sendPayload(DspProtocol.buildMatrixCrosspointGain(output, input, db));
     }
@@ -353,6 +361,28 @@ public final class DspClient implements Closeable {
         ));
     }
 
+    public void setInputCompressor(DspChannel input,
+                                   int ratioRaw,
+                                   int attackRaw,
+                                   int releaseRaw,
+                                   int kneeRaw,
+                                   int thresholdRaw,
+                                   int frequencyRaw,
+                                   int typeContextRaw,
+                                   int typeRaw) throws IOException {
+        sendPayload(DspProtocol.buildInputCompressor(
+                input,
+                ratioRaw,
+                attackRaw,
+                releaseRaw,
+                kneeRaw,
+                thresholdRaw,
+                frequencyRaw,
+                typeContextRaw,
+                typeRaw
+        ));
+    }
+
     public void setCompressor(DspChannel output,
                               int ratioRaw,
                               int attackRaw,
@@ -372,13 +402,13 @@ public final class DspClient implements Closeable {
     public void setLimiter(DspChannel output,
                            double attackMs,
                            double releaseMs,
-                           int unknownRaw,
+                           int kneeRaw,
                            double thresholdDb) throws IOException {
         sendPayload(DspProtocol.buildLimiter(
                 output,
                 attackMs,
                 releaseMs,
-                unknownRaw,
+                kneeRaw,
                 thresholdDb
         ));
     }
@@ -386,13 +416,13 @@ public final class DspClient implements Closeable {
     public void setLimiter(DspChannel output,
                            int attackRaw,
                            int releaseRaw,
-                           int unknownRaw,
+                           int kneeRaw,
                            int thresholdRaw) throws IOException {
         sendPayload(DspProtocol.buildLimiter(
                 output,
                 attackRaw,
                 releaseRaw,
-                unknownRaw,
+                kneeRaw,
                 thresholdRaw
         ));
     }
@@ -423,12 +453,34 @@ public final class DspClient implements Closeable {
 
     public synchronized void sendPayload(byte[] payload) throws IOException {
         ensureConnected();
+        awaitTransmitSlot();
 
         byte[] frame = DspFrameCodec.encode(payload);
         out.write(frame);
         out.flush();
+        lastTransmitNanos = System.nanoTime();
 
         log("--> TX payload=" + Hex.format(payload) + " | frame=" + Hex.format(frame));
+    }
+
+    private void awaitTransmitSlot() throws IOException {
+        if (lastTransmitNanos == 0L) {
+            return;
+        }
+
+        long remainingNanos = MIN_TRANSMIT_GAP_NANOS - (System.nanoTime() - lastTransmitNanos);
+        if (remainingNanos <= 0L) {
+            return;
+        }
+
+        long millis = TimeUnit.NANOSECONDS.toMillis(remainingNanos);
+        int nanos = (int) (remainingNanos - TimeUnit.MILLISECONDS.toNanos(millis));
+        try {
+            Thread.sleep(millis, nanos);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while pacing DSP transmissions", e);
+        }
     }
 
     private synchronized void startReader() {
@@ -559,6 +611,7 @@ public final class DspClient implements Closeable {
         out = null;
         socket = null;
         readerThread = null;
+        lastTransmitNanos = 0L;
         // payloadListener absichtlich NICHT nullen:
         // sonst verliert der Client nach Reconnect still seinen Decoder/State-Listener.
 

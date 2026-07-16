@@ -505,23 +505,25 @@ public final class DspCommandProcessor {
     }
 
     private void handleCompGet(String[] parts) {
-        requireArgs(parts, 2, "Usage: compget <out>");
-        DspChannel output = parseOutput(parts[1]);
-        CompressorState state = controller.state().compressor(output);
+        requireArgs(parts, 2, "Usage: compget <in>");
+        DspChannel input = parseInput(parts[1]);
+        CompressorState state = controller.state().compressor(input);
         if (state == null || !state.hasAnyValues()) {
-            log.accept(output.displayName() + " compressor: no data");
+            log.accept(input.displayName() + " compressor: no data");
             return;
         }
 
         log.accept(String.format(
                 Locale.ROOT,
-                "%s compressor: ratio=%s attack=%s release=%s knee=%s threshold=%s",
-                output.displayName(),
+                "%s compressor: ratio=%s attack=%s release=%s knee=%s threshold=%s frequency=%s type=%s",
+                input.displayName(),
                 valueOrDash(state.ratioLabel()),
                 valueOrDash(state.attackMs() == null ? null : String.format(Locale.ROOT, "%.0f ms", state.attackMs())),
                 valueOrDash(state.releaseMs() == null ? null : String.format(Locale.ROOT, "%.0f ms", state.releaseMs())),
                 valueOrDash(state.kneeDb() == null ? null : String.format(Locale.ROOT, "%.1f dB", state.kneeDb())),
-                valueOrDash(state.thresholdDb() == null ? null : String.format(Locale.ROOT, "%.1f dB", state.thresholdDb()))
+                valueOrDash(state.thresholdDb() == null ? null : String.format(Locale.ROOT, "%.1f dB", state.thresholdDb())),
+                valueOrDash(state.frequencyHz() == null ? null : DspTextFormatter.formatFrequency(state.frequencyHz())),
+                valueOrDash(state.typeLabel())
         ));
     }
 
@@ -536,20 +538,20 @@ public final class DspCommandProcessor {
 
         log.accept(String.format(
                 Locale.ROOT,
-                "%s limiter: attack=%s release=%s threshold=%s runtime=%s unknown=%s",
+                "%s limiter: attack=%s release=%s threshold=%s runtime=%s knee=%s",
                 output.displayName(),
                 valueOrDash(state.attackMs() == null ? null : String.format(Locale.ROOT, "%.0f ms", state.attackMs())),
                 valueOrDash(state.releaseMs() == null ? null : String.format(Locale.ROOT, "%.0f ms", state.releaseMs())),
                 valueOrDash(state.thresholdDb() == null ? null : String.format(Locale.ROOT, "%.1f dB", state.thresholdDb())),
                 valueOrDash(state.runtimeActive() == null ? null : (state.runtimeActive() ? "active" : "idle")),
-                valueOrDash(state.unknownValue() == null ? null : String.format(Locale.ROOT, "0x%04X", state.unknownValue()))
+                valueOrDash(state.kneeDb() == null ? null : String.format(Locale.ROOT, "%.0f dB", state.kneeDb()))
         ));
     }
 
     private void handleCompSet(String[] parts) throws IOException {
-        requireArgs(parts, 7, "Usage: compset <out> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>");
+        requireArgs(parts, 7, "Usage: compset <in> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>");
         controller.setCompressor(
-                parseOutput(parts[1]),
+                parseInput(parts[1]),
                 Double.parseDouble(parts[2]),
                 parts[3],
                 Double.parseDouble(parts[4]),
@@ -648,9 +650,9 @@ public final class DspCommandProcessor {
       meterwatch [intervalMs]
       meterstop
 
-      compget <out>
+      compget <in>
       limitget <out>
-      compset <out> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>
+      compset <in> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>
       limitset <out> <thresholdDb> <attackMs> <releaseMs>
 
       toneon <freqHz>

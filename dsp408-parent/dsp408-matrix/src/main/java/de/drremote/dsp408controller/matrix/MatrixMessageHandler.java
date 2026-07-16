@@ -202,7 +202,7 @@ public final class MatrixMessageHandler {
         api.sendEvent(roomId, EVT_MACHINE_RESPONSE, response);
     }
 
-    private String mapMachineCommand(String command, JsonNode args) {
+    static String mapMachineCommand(String command, JsonNode args) {
         return switch (command) {
             case "connection.connect" -> "!dsp connect";
             case "connection.disconnect" -> "!dsp disconnect";
@@ -242,6 +242,8 @@ public final class MatrixMessageHandler {
             case "preset.name.read" -> "!dsp readpresetname " + requireNumber(args, "index");
 
             case "meters.read" -> "!dsp meters";
+            case "meters.get" -> "!dsp meterstate";
+            case "meter.get" -> "!dsp meter " + requireText(args, "channelId");
 
             case "matrix.route.set" ->
                     "!dsp route " + requireText(args, "output") + " " + requireText(args, "input");

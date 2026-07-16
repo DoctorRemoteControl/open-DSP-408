@@ -1,5 +1,7 @@
 package de.drremote.dsp408controller.core.decode;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
 
@@ -40,8 +42,8 @@ public final class MatrixRoutingBlockDecoder implements BlockDecoder {
             }
 
             int raw = data[location.dataOffset()] & 0xFF;
-            DspChannel input = decodeMask(raw);
-            if (input == null) {
+            List<DspChannel> inputs = decodeMask(raw);
+            if (inputs == null) {
                 if (log != null) {
                     log.accept(String.format(
                             Locale.ROOT,
@@ -55,14 +57,16 @@ public final class MatrixRoutingBlockDecoder implements BlockDecoder {
                 continue;
             }
 
-            state.markMatrixRoute(output, input);
+            state.markMatrixRoutes(output, inputs);
 
             if (log != null) {
                 log.accept(String.format(
                         Locale.ROOT,
                         "MATRIX ROUTE RX %s <- %s (block %02X offset %02X raw=0x%02X)",
                         output.displayName(),
-                        input.displayName(),
+                        inputs.isEmpty()
+                                ? "-"
+                                : inputs.stream().map(DspChannel::displayName).reduce((a, b) -> a + "+" + b).orElse("-"),
                         blockIndex,
                         location.dataOffset(),
                         raw
@@ -71,13 +75,23 @@ public final class MatrixRoutingBlockDecoder implements BlockDecoder {
         }
     }
 
-    private static DspChannel decodeMask(int raw) {
-        return switch (raw) {
-            case 0x01 -> DspChannel.IN_A;
-            case 0x02 -> DspChannel.IN_B;
-            case 0x04 -> DspChannel.IN_C;
-            case 0x08 -> DspChannel.IN_D;
-            default -> null;
-        };
+    private static List<DspChannel> decodeMask(int raw) {
+        if ((raw & ~0x0F) != 0) {
+            return null;
+        }
+        List<DspChannel> inputs = new ArrayList<>();
+        if ((raw & 0x01) != 0) {
+            inputs.add(DspChannel.IN_A);
+        }
+        if ((raw & 0x02) != 0) {
+            inputs.add(DspChannel.IN_B);
+        }
+        if ((raw & 0x04) != 0) {
+            inputs.add(DspChannel.IN_C);
+        }
+        if ((raw & 0x08) != 0) {
+            inputs.add(DspChannel.IN_D);
+        }
+        return List.copyOf(inputs);
     }
 }

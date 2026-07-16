@@ -13,11 +13,17 @@ public final class MeterLayout {
     private final int responseLengthBytes;
     private final int statusByteOffset;
     private final int limiterMaskOffset;
+    private final boolean channelMappingConfirmed;
+    private final boolean levelCalibrationConfirmed;
+    private final boolean limiterMappingConfirmed;
 
     public MeterLayout(List<MeterSlotLocation> slots,
                        int responseLengthBytes,
                        int statusByteOffset,
-                       int limiterMaskOffset) {
+                       int limiterMaskOffset,
+                       boolean channelMappingConfirmed,
+                       boolean levelCalibrationConfirmed,
+                       boolean limiterMappingConfirmed) {
         this.slots = List.copyOf(new ArrayList<>(slots));
 
         Map<DspChannel, MeterSlotLocation> byChannel = new EnumMap<>(DspChannel.class);
@@ -28,6 +34,9 @@ public final class MeterLayout {
         this.responseLengthBytes = responseLengthBytes;
         this.statusByteOffset = statusByteOffset;
         this.limiterMaskOffset = limiterMaskOffset;
+        this.channelMappingConfirmed = channelMappingConfirmed;
+        this.levelCalibrationConfirmed = levelCalibrationConfirmed;
+        this.limiterMappingConfirmed = limiterMappingConfirmed;
     }
 
     public List<MeterSlotLocation> slots() {
@@ -48,6 +57,18 @@ public final class MeterLayout {
 
     public int limiterMaskOffset() {
         return limiterMaskOffset;
+    }
+
+    public boolean channelMappingConfirmed() {
+        return channelMappingConfirmed;
+    }
+
+    public boolean levelCalibrationConfirmed() {
+        return levelCalibrationConfirmed;
+    }
+
+    public boolean limiterMappingConfirmed() {
+        return limiterMappingConfirmed;
     }
 
     public boolean hasSlots() {

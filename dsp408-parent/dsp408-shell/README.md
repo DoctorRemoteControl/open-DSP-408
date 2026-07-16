@@ -121,6 +121,7 @@ dsp408:connect
 dsp408:state
 dsp408:channels
 dsp408:meters
+dsp408:meter out1
 ```
 
 If `auto.connect true` is configured, `dsp408:connected` may already return `yes`.
@@ -208,11 +209,21 @@ Read a preset name:
 dsp408:readpresetname 0
 ```
 
-Request meter values:
+Request fresh meter values from the DSP:
 
 ```text
 dsp408:meters
 ```
+
+Read the latest cached meter state or one channel:
+
+```text
+dsp408:meterstate
+dsp408:meter out1
+dsp408:dsp fir408 meter out1
+```
+
+The channel result contains the decoded `levelDb` and, for outputs, `limiterActive`.
 
 ## Matrix Routing
 
@@ -337,8 +348,8 @@ dsp408:gaterelease ina 200
 Set and read compressor values:
 
 ```text
-dsp408:compset out1 -12 4:1 10 200 3
-dsp408:compget out1
+dsp408:compset ina -12 1:4.0 10 200 3
+dsp408:compget ina
 ```
 
 Set and read limiter values:
@@ -437,6 +448,11 @@ Send a raw hex payload:
 ```text
 dsp408:raw AA BB CC
 ```
+
+FIR408 commands whose write layout is not confirmed are rejected with an
+`Unsupported` message before a network payload is sent. The raw command
+deliberately bypasses that check and should only be used for controlled
+protocol diagnostics.
 
 ## Legacy Fallback
 

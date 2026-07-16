@@ -643,11 +643,11 @@
         0,
         300
       ],
-      "raw_to_gui": "hz = 19.7 * pow(20160.0 / 19.7, raw / 300.0)",
-      "gui_to_raw": "raw = round(300.0 * log(hz / 19.7) / log(20160.0 / 19.7))",
+      "raw_to_gui": "hz = 19.6875 * pow(2.0, raw / 30.0)",
+      "gui_to_raw": "raw = round(30.0 * log(hz / 19.6875) / log(2.0))",
       "mapping_model": "logarithmic",
-      "note": "Inherited from the decoded DSP408 PEQ/crossover frequency model and confirmed by FIR 0x4B HighPass/LowPass raw samples.",
-      "status": "observed_plus_inferred_strong"
+      "note": "Exact FIR408 GUI anchors confirmed from the original GUI plus the live block dump: raw 0=19.7 Hz, 91=161.2 Hz, 95=176.8 Hz, 127=370.3 Hz, 158=757.9 Hz, and 300=20.16 kHz.",
+      "status": "observed_original_gui_plus_live_block_read_2026_07_16"
     },
     "peq_q": {
       "ui_unit": "Q",
@@ -659,11 +659,11 @@
         0,
         100
       ],
-      "raw_to_gui": "q = 0.4 * pow(128.0 / 0.4, raw / 100.0)",
-      "gui_to_raw": "raw = round(100.0 * log(q / 0.4) / log(128.0 / 0.4))",
+      "raw_to_gui": "q = raw == 100 ? 128.0 : 0.4 * pow(10.0, raw / 40.0)",
+      "gui_to_raw": "raw = q >= 128.0 ? 100 : round(40.0 * log(q / 0.4) / log(10.0))",
       "mapping_model": "logarithmic",
-      "note": "Observed PEQ Q writes fit a logarithmic GUI control covering 0.40 .. 128.00 over raw 0..100.",
-      "status": "observed_on_fir408_peq_captures"
+      "note": "FIR408 GUI anchors confirm raw 10=0.71 and raw 35=3.00. Raw 100 is the special maximum value Q=128.00.",
+      "status": "observed_original_gui_plus_live_block_read_2026_07_16"
     },
     "peq_gain": {
       "ui_unit": "dB",
@@ -1296,59 +1296,60 @@
         "status": "observed_fir408_gain_page_gui_captures"
       },
       "read": {
-        "status": "predicted_from_dsp408",
+        "status": "verified_live_fir408_all_12_channels_2026_07_16",
+        "verification_note": "All 12 gain locations were marker-tested and then matched by a full 32-block live readback on FIR408 V0113P.",
         "type": "u16le",
         "input_locations": [
           {
             "channel": "InA",
             "block_hex": "02",
-            "offset_dec": 53,
+            "offset_dec": 51,
             "examples": {
               "0.0dB_raw": 280,
               "-6.0dB_raw": 220
             },
             "note": "confirmed by scripted write 00 01 04 34 00 18 01 vs 00 01 04 34 00 DC 00 and direct diffReport on block 0x02",
-            "status": "predicted_from_dsp408"
+            "status": "verified_live_fir408_2026_07_16"
           },
           {
             "channel": "InB",
             "block_hex": "05",
-            "offset_dec": 43,
+            "offset_dec": 39,
             "examples": {
               "0.0dB_raw": 280,
               "-6.0dB_raw": 220
             },
             "note": "confirmed by scripted write 00 01 04 34 01 18 01 vs 00 01 04 34 01 DC 00 and direct diffReport on block 0x05",
-            "status": "predicted_from_dsp408"
+            "status": "verified_live_fir408_2026_07_16"
           },
           {
             "channel": "InC",
             "block_hex": "08",
-            "offset_dec": 33,
+            "offset_dec": 27,
             "examples": {
               "0.0dB_raw": 280,
               "-6.0dB_raw": 220
             },
             "note": "confirmed by scripted write 00 01 04 34 02 18 01 vs 00 01 04 34 02 DC 00 and direct diffReport on block 0x08",
-            "status": "predicted_from_dsp408"
+            "status": "verified_live_fir408_2026_07_16"
           },
           {
             "channel": "InD",
             "block_hex": "0B",
-            "offset_dec": 23,
+            "offset_dec": 15,
             "examples": {
               "0.0dB_raw": 280,
               "-6.0dB_raw": 220
             },
             "note": "confirmed by scripted write 00 01 04 34 03 18 01 vs 00 01 04 34 03 DC 00 and direct diffReport on block 0x0B",
-            "status": "predicted_from_dsp408"
+            "status": "verified_live_fir408_2026_07_16"
           }
         ],
         "output_locations": [
           {
             "channel": "Out1",
             "block_hex": "0D",
-            "offset_dec": 27
+            "offset_dec": 23
           },
           {
             "channel": "Out2",
@@ -1358,32 +1359,32 @@
           {
             "channel": "Out3",
             "block_hex": "11",
-            "offset_dec": 35
+            "offset_dec": 39
           },
           {
             "channel": "Out4",
             "block_hex": "13",
-            "offset_dec": 39
-          },
-          {
-            "channel": "Out5",
-            "block_hex": "15",
-            "offset_dec": 43
-          },
-          {
-            "channel": "Out6",
-            "block_hex": "17",
             "offset_dec": 47
           },
           {
+            "channel": "Out5",
+            "block_hex": "16",
+            "offset_dec": 5
+          },
+          {
+            "channel": "Out6",
+            "block_hex": "18",
+            "offset_dec": 13
+          },
+          {
             "channel": "Out7",
-            "block_hex": "19",
-            "offset_dec": 51
+            "block_hex": "1A",
+            "offset_dec": 21
           },
           {
             "channel": "Out8",
             "block_hex": "1C",
-            "offset_dec": 5
+            "offset_dec": 29
           }
         ],
         "examples": {
@@ -2558,7 +2559,7 @@
               }
             },
             "Out2": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "output_index_zero_based": 1,
               "value_start_absolute_offset_dec": 712,
               "value_record_starts": {
@@ -2580,7 +2581,7 @@
               }
             },
             "Out3": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "output_index_zero_based": 2,
               "value_start_absolute_offset_dec": 820,
               "value_record_starts": {
@@ -2602,7 +2603,7 @@
               }
             },
             "Out4": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "output_index_zero_based": 3,
               "value_start_absolute_offset_dec": 928,
               "value_record_starts": {
@@ -2624,7 +2625,7 @@
               }
             },
             "Out5": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "output_index_zero_based": 4,
               "value_start_absolute_offset_dec": 1036,
               "value_record_starts": {
@@ -2646,7 +2647,7 @@
               }
             },
             "Out6": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "output_index_zero_based": 5,
               "value_start_absolute_offset_dec": 1144,
               "value_record_starts": {
@@ -2668,7 +2669,7 @@
               }
             },
             "Out7": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "output_index_zero_based": 6,
               "value_start_absolute_offset_dec": 1252,
               "value_record_starts": {
@@ -3147,6 +3148,14 @@
                 "status": "observed_fir408_ina_allbands_pattern"
               }
             }
+          },
+          "InB": {
+            "status": "observed_original_gui_plus_live_block_read_2026_07_16",
+            "note": "All eight PEQ records and the bypass mask matched the original GUI screenshot and the live 0x00..0x1F block dump."
+          },
+          "InC": {
+            "status": "observed_original_gui_plus_live_block_read_2026_07_16",
+            "note": "All eight PEQ records and the bypass mask matched the original GUI screenshot and the live 0x00..0x1F block dump."
           },
           "InD": {
             "status": "observed_fir408_ind_allbands_pattern",
@@ -4418,12 +4427,12 @@
             "InB": {
               "block_hex": "0x1C",
               "offset_dec": 43,
-              "status": "predicted_from_observed_ina_ind_stride"
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16"
             },
             "InC": {
               "block_hex": "0x1C",
               "offset_dec": 45,
-              "status": "predicted_from_observed_ina_ind_stride"
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16"
             },
             "InD": {
               "block_hex": "0x1C",
@@ -5470,7 +5479,7 @@
               }
             },
             "Out2": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "channel_index_hex": "0x05",
               "output_index_zero_based": 1,
               "output_base_absolute_offset_dec": 676,
@@ -5508,7 +5517,7 @@
               }
             },
             "Out3": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "channel_index_hex": "0x06",
               "output_index_zero_based": 2,
               "output_base_absolute_offset_dec": 784,
@@ -5546,7 +5555,7 @@
               }
             },
             "Out4": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "channel_index_hex": "0x07",
               "output_index_zero_based": 3,
               "output_base_absolute_offset_dec": 892,
@@ -5584,7 +5593,7 @@
               }
             },
             "Out5": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "channel_index_hex": "0x08",
               "output_index_zero_based": 4,
               "output_base_absolute_offset_dec": 1000,
@@ -5622,7 +5631,7 @@
               }
             },
             "Out6": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "channel_index_hex": "0x09",
               "output_index_zero_based": 5,
               "output_base_absolute_offset_dec": 1108,
@@ -5660,7 +5669,7 @@
               }
             },
             "Out7": {
-              "status": "derived_from_observed_out1_out8_stride",
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "channel_index_hex": "0x0A",
               "output_index_zero_based": 6,
               "output_base_absolute_offset_dec": 1216,
@@ -6446,51 +6455,53 @@
         "status": "observed_fir408_gui_gate_ina_ind_captures"
       },
       "read": {
-        "status": "predicted_from_dsp408",
-        "type": "u16le_candidate",
+        "status": "observed_fir408_ina_ind_full_dump_marker_diff_2026_07_16",
+        "type": "u16le_observed",
+        "verification_report": "tracks-dsp-raider/out/fir/fir408-gate-readback-fullscan-2026-07-16/summary.md",
         "field_mappings": {
           "attack": {
             "raw_to_gui": "ms = raw + 1",
             "gui_to_raw": "raw = ms - 1",
-            "status": "predicted_from_dsp408"
+            "status": "observed_fir408_ina_ind_full_range_marker_diff"
           },
           "release": {
             "raw_to_gui": "ms = raw + 1",
             "gui_to_raw": "raw = ms - 1",
-            "status": "predicted_from_dsp408"
+            "status": "observed_fir408_ina_ind_full_range_marker_diff"
           },
           "hold": {
             "raw_to_gui": "ms = raw + 1",
             "gui_to_raw": "raw = ms - 1",
-            "status": "predicted_from_dsp408"
+            "status": "observed_fir408_ina_ind_full_range_marker_diff"
           },
           "threshold": {
             "raw_to_gui": "db = (raw / 2.0) - 90.0",
             "gui_to_raw": "raw = round((db + 90.0) * 2.0)",
-            "status": "predicted_from_dsp408"
+            "status": "observed_fir408_ina_ind_full_range_marker_diff"
           }
         },
         "input_locations": {
           "InA": {
             "storage": "block_dump",
             "block_hex": "00",
+            "status": "observed_fir408_full_dump_marker_diff_2026_07_16",
             "attack": {
               "offset_dec": 29,
               "examples": {
                 "raw_low": 0,
                 "raw_high": 998
               },
-              "note": "controlled write diff with 00 01 0A 3E 00 00 00 63 00 63 00 00 00 vs 00 01 0A 3E 00 E6 03 63 00 63 00 00 00 changed bytes 0x1D..0x1E; u16le candidate at offset 29 changed from 0 to 998",
-              "status": "predicted_from_dsp408"
+              "note": "2026-07-16 full 32-block marker diff changed only payload offsets 29..30 in block 0x00; u16le changed 0 -> 998 -> 0 and the full config restored byte-for-byte",
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
             },
             "release": {
               "offset_dec": 31,
               "examples": {
-                "raw_low": 0,
+                "raw_low": 9,
                 "raw_high": 2999
               },
-              "note": "controlled write diff with 00 01 0A 3E 00 00 00 00 00 09 00 00 00 vs 00 01 0A 3E 00 00 00 B7 0B 09 00 00 00 changed bytes 0x1F..0x20; u16le candidate at offset 31 changed from 0 to 2999. A later unique-pattern scan also hit the same value in unrelated positions, so only the targeted Gate offset is treated as the confirmed mapping.",
-              "status": "predicted_from_dsp408"
+              "note": "2026-07-16 full 32-block marker diff changed only payload offsets 31..32 in block 0x00; u16le changed 9 -> 2999 -> 9 and the full config restored byte-for-byte",
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
             },
             "hold": {
               "offset_dec": 33,
@@ -6498,8 +6509,8 @@
                 "raw_low": 9,
                 "raw_high": 998
               },
-              "note": "controlled write diff with 00 01 0A 3E 00 00 00 63 00 09 00 00 00 vs 00 01 0A 3E 00 00 00 63 00 E6 03 00 00 changed bytes 0x21..0x22; u16le candidate at offset 33 changed from 9 to 998",
-              "status": "predicted_from_dsp408"
+              "note": "2026-07-16 full 32-block marker diff changed only payload offsets 33..34 in block 0x00; u16le changed 9 -> 998 -> 9 and the full config restored byte-for-byte",
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
             },
             "threshold": {
               "offset_dec": 35,
@@ -6507,128 +6518,154 @@
                 "raw_low": 0,
                 "raw_high": 180
               },
-              "note": "controlled write diff with 00 01 0A 3E 00 00 00 63 00 63 00 00 00 vs 00 01 0A 3E 00 00 00 63 00 63 00 B4 00 changed byte 0x23; u16le candidate at offset 35 changed from 0 to 180",
-              "status": "predicted_from_dsp408"
+              "note": "2026-07-16 full 32-block marker diff changed only payload offset 35 in block 0x00; u16le changed 0 -> 180 -> 0 and the full config restored byte-for-byte",
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
             }
           },
           "InD": {
             "storage": "block_dump",
+            "block_hex": "08",
+            "status": "observed_fir408_full_dump_marker_diff_2026_07_16",
             "attack": {
               "block_hex": "08",
-              "offset_dec": 49,
+              "offset_dec": 43,
               "examples": {
                 "raw_low": 0,
                 "raw_high": 998
               },
-              "note": "controlled write diff with 00 01 0A 3E 03 00 00 63 00 63 00 00 00 vs 00 01 0A 3E 03 E6 03 63 00 63 00 00 00 changed bytes 0x31..0x32 in block 0x08; u16le candidate at offset 49 changed from 0 to 998",
-              "status": "predicted_from_dsp408"
+              "note": "2026-07-16 full 32-block marker diff changed only payload offsets 43..44 in block 0x08; u16le changed 0 -> 998 -> 0 and the full config restored byte-for-byte",
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
+            },
+            "release": {
+              "block_hex": "08",
+              "offset_dec": 45,
+              "examples": {
+                "raw_low": 99,
+                "raw_high": 2999
+              },
+              "note": "2026-07-16 full 32-block marker diff changed only payload offsets 45..46 in block 0x08; u16le changed 99 -> 2999 -> 99 and the full config restored byte-for-byte",
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
+            },
+            "hold": {
+              "block_hex": "08",
+              "offset_dec": 47,
+              "examples": {
+                "raw_low": 99,
+                "raw_high": 998
+              },
+              "note": "2026-07-16 full 32-block marker diff changed only payload offsets 47..48 in block 0x08; u16le changed 99 -> 998 -> 99 and the full config restored byte-for-byte",
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
             },
             "threshold": {
-              "block_hex": "09",
-              "offset_dec": 5,
+              "block_hex": "08",
+              "offset_dec": 49,
               "examples": {
-                "raw_low": 0,
+                "raw_low": 56,
                 "raw_high": 180
               },
-              "note": "controlled write diff with 00 01 0A 3E 03 00 00 63 00 63 00 00 00 vs 00 01 0A 3E 03 00 00 63 00 63 00 B4 00 changed byte 0x05 in block 0x09; u16le candidate at offset 5 changed from 0 to 180",
-              "status": "predicted_from_dsp408"
+              "note": "2026-07-16 full 32-block marker diff changed only payload offset 49 in block 0x08; u16le changed 56 -> 180 -> 56 and the full config restored byte-for-byte",
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
             }
           }
         },
         "full_input_read_map": {
-          "rule": "Gate read storage follows the same per-input stride pattern already observed for other input parameters: +3 blocks and -10 payload offsets per channel step, with wrap into the preceding block when needed. A unique-pattern dump scan matched the expected Gate values exactly at the predicted positions for InA..InD.",
+          "rule": "InA and InD were verified by controlled marker diffs. InB and InC were then confirmed by matching their original-GUI values against the live 0x00..0x1F block dump.",
           "inputs": {
             "InA": {
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16",
               "attack": {
                 "block_hex": "00",
                 "offset_dec": 29,
-                "status": "predicted_from_dsp408"
+                "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
               },
               "release": {
                 "block_hex": "00",
                 "offset_dec": 31,
-                "status": "predicted_from_dsp408"
+                "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
               },
               "hold": {
                 "block_hex": "00",
                 "offset_dec": 33,
-                "status": "predicted_from_dsp408"
+                "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
               },
               "threshold": {
                 "block_hex": "00",
                 "offset_dec": 35,
-                "status": "predicted_from_dsp408"
+                "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
               }
             },
             "InB": {
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "attack": {
+                "block_hex": "03",
+                "offset_dec": 17,
+                "status": "predicted_from_dsp408"
+              },
+              "release": {
                 "block_hex": "03",
                 "offset_dec": 19,
                 "status": "predicted_from_dsp408"
               },
-              "release": {
+              "hold": {
                 "block_hex": "03",
                 "offset_dec": 21,
                 "status": "predicted_from_dsp408"
               },
-              "hold": {
-                "block_hex": "03",
-                "offset_dec": 23,
-                "status": "predicted_from_dsp408"
-              },
               "threshold": {
                 "block_hex": "03",
-                "offset_dec": 25,
+                "offset_dec": 23,
                 "status": "predicted_from_dsp408"
               }
             },
             "InC": {
+              "status": "observed_original_gui_plus_live_block_read_2026_07_16",
               "attack": {
+                "block_hex": "06",
+                "offset_dec": 5,
+                "status": "predicted_from_dsp408"
+              },
+              "release": {
+                "block_hex": "06",
+                "offset_dec": 7,
+                "status": "predicted_from_dsp408"
+              },
+              "hold": {
                 "block_hex": "06",
                 "offset_dec": 9,
                 "status": "predicted_from_dsp408"
               },
-              "release": {
-                "block_hex": "06",
-                "offset_dec": 11,
-                "status": "predicted_from_dsp408"
-              },
-              "hold": {
-                "block_hex": "06",
-                "offset_dec": 13,
-                "status": "predicted_from_dsp408"
-              },
               "threshold": {
                 "block_hex": "06",
-                "offset_dec": 15,
+                "offset_dec": 11,
                 "status": "predicted_from_dsp408"
               }
             },
             "InD": {
+              "status": "observed_fir408_full_dump_marker_diff_2026_07_16",
               "attack": {
                 "block_hex": "08",
-                "offset_dec": 49,
-                "status": "predicted_from_dsp408"
+                "offset_dec": 43,
+                "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
               },
               "release": {
                 "block_hex": "08",
-                "offset_dec": 51,
-                "status": "predicted_from_dsp408"
+                "offset_dec": 45,
+                "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
               },
               "hold": {
                 "block_hex": "08",
-                "offset_dec": 53,
-                "status": "predicted_from_dsp408"
+                "offset_dec": 47,
+                "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
               },
               "threshold": {
-                "block_hex": "09",
-                "offset_dec": 5,
-                "status": "predicted_from_dsp408"
+                "block_hex": "08",
+                "offset_dec": 49,
+                "status": "observed_fir408_full_dump_marker_diff_2026_07_16"
               }
             }
           }
         },
-        "not_yet_proven": "whether all gate read fields are stored as full u16le across the full value range"
+        "not_yet_proven": "InB and InC read addresses; their current positions are stride predictions and remain decoder-blocked"
       }
     },
     "limiter": {
@@ -7355,8 +7392,13 @@
       }
     },
     "compressor": {
+      "fir408_availability": {
+        "available": false,
+        "status": "stale_historical_output_compressor_hypothesis_not_fir408_gui",
+        "note": "The FIR408 GUI compressor page is InA..InD. Use parameters.input_compressor. This inherited output hypothesis overlaps output PEQ storage and must not be used."
+      },
       "ui": {
-        "scope": "outputs",
+        "scope": "historical_stale_output_hypothesis",
         "fields": [
           "threshold",
           "ratio",
@@ -7384,7 +7426,7 @@
         }
       },
       "write": {
-        "status": "observed_plus_predicted_strong",
+        "status": "stale_historical_output_compressor_hypothesis_not_fir408_gui",
         "command": "0x30",
         "payload_structure": "00 01 0C 30 <output_channel_index> <ratio_lo> <ratio_hi> <attack_lo> <attack_hi> <release_lo> <release_hi> <knee_lo> <knee_hi> <threshold_lo> <threshold_hi>",
         "field_order": [
@@ -8008,14 +8050,102 @@
         "status": "observed_fir408_gain_page_gui_captures"
       },
       "read": {
-        "status": "predicted_from_existing_phase_read_decode_scripts",
-        "source_scripts": [
-          "script-example/18-read-decode-ina-phase.dspd",
-          "script-example/21-read-decode-inb-phase-allblocks.dspd",
-          "script-example/24-read-decode-inc-phase-allblocks.dspd",
-          "script-example/27-read-decode-ind-phase-allblocks.dspd"
+        "status": "observed_fir408_all_channel_full_dump_marker_diff_2026_07_16",
+        "type": "u16le_enum",
+        "source_tool": "de.drremote.dsp408.raw.Fir408PhaseReadVerifier",
+        "source_report": "tracks-dsp-raider/out/fir/fir408-phase-readback-fullscan-2026-07-16/summary.md",
+        "verification": {
+          "device": "FIR408 V0113P",
+          "method": "for each channel: force mute, write 0 degrees, read blocks 0x00..0x1F, write 180 degrees, read blocks 0x00..0x1F, restore 0 degrees, read blocks 0x00..0x1F",
+          "all_channels_verified": true,
+          "exactly_one_changed_byte_per_channel": true,
+          "normal_raw_u16le": 0,
+          "inverted_raw_u16le": 1,
+          "per_channel_restore_verified": true,
+          "full_config_restored_byte_for_byte": true,
+          "final_safety_state": "all channels phase-normal and muted"
+        },
+        "input_locations": [
+          {
+            "channel": "InA",
+            "block_hex": "02",
+            "offset_dec": 53,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "InB",
+            "block_hex": "05",
+            "offset_dec": 41,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "InC",
+            "block_hex": "08",
+            "offset_dec": 29,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "InD",
+            "block_hex": "0B",
+            "offset_dec": 17,
+            "status": "observed_strong"
+          }
         ],
-        "note": "Write-side is now confirmed by Gain page GUI captures. Read-side phase offsets still need the same current all-channel FIR408 cleanup pass used for Comp, Limit, Delay, Matrix, and Gate."
+        "output_locations": [
+          {
+            "channel": "Out1",
+            "block_hex": "0D",
+            "offset_dec": 25,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "Out2",
+            "block_hex": "0F",
+            "offset_dec": 33,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "Out3",
+            "block_hex": "11",
+            "offset_dec": 41,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "Out4",
+            "block_hex": "13",
+            "offset_dec": 49,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "Out5",
+            "block_hex": "16",
+            "offset_dec": 7,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "Out6",
+            "block_hex": "18",
+            "offset_dec": 15,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "Out7",
+            "block_hex": "1A",
+            "offset_dec": 23,
+            "status": "observed_strong"
+          },
+          {
+            "channel": "Out8",
+            "block_hex": "1C",
+            "offset_dec": 31,
+            "status": "observed_strong"
+          }
+        ],
+        "examples": {
+          "0deg_raw": 0,
+          "180deg_raw": 1
+        },
+        "note": "All FIR408 phase read locations were measured directly. Eleven of twelve legacy DSP408 offsets were wrong for FIR408; only Out2 happened to match."
       }
     },
     "matrix_routing": {
@@ -8717,39 +8847,45 @@
         "not_applicable": true
       },
       "read": {
-        "status": "predicted_from_dsp408",
+        "status": "observed_on_fir408_lan",
         "command": "0x40",
         "request_payload_hex": "00 01 01 40",
         "response_direction": "DSP_TO_PC",
-        "response_length_bytes_observed": 42,
+        "response_length_bytes_observed": 46,
         "response_structure": {
           "header_bytes": {
             "offset_range": "0..3",
-            "observed_template_hex": "01 00 27 40",
-            "status": "predicted_from_dsp408"
+            "observed_template_hex": "01 00 2B 40",
+            "status": "observed_on_fir408_lan"
           },
           "meter_slot_region": {
             "offset_range": "4..39",
             "slot_count": 12,
             "slot_width_bytes": 3,
             "slot_layout": "12 consecutive 3-byte runtime meter slots",
-            "status": "predicted_from_dsp408"
+            "status": "observed_on_fir408_lan"
           },
           "tail_bytes": {
-            "offset_range": "40..41",
-            "status": "predicted_from_dsp408",
+            "offset_range": "40..45",
+            "status": "observed_on_fir408_lan",
             "bytes": [
               {
                 "offset": 40,
                 "name": "status_byte_40",
-                "status": "predicted_from_dsp408",
+                "status": "observed_on_fir408_lan",
                 "note": "not required for known-good meter or limiter GUI behavior"
               },
               {
                 "offset": 41,
                 "name": "output_limiter_mask",
                 "type": "bitmask_u8",
-                "status": "predicted_from_dsp408"
+                "status": "observed_on_fir408_lan"
+              },
+              {
+                "offset_range": "42..45",
+                "name": "fir408_extra_runtime_bytes",
+                "status": "observed_unknown",
+                "note": "Present on physical FIR408 cmd 0x40 responses; semantics are not decoded."
               }
             ]
           }
@@ -8835,7 +8971,7 @@
         "value_encoding": {
           "slot_value_shape": {
             "bytes_per_slot": 3,
-            "status": "predicted_from_dsp408"
+            "status": "observed_on_fir408_lan"
           },
           "primary_meter_bytes": {
             "offsets_within_slot": [
@@ -8845,7 +8981,7 @@
             "type": "runtime_level_drive_pair",
             "byte_order": "low, high",
             "meaning": "these two bytes are sufficient to drive the original GUI level/meter display for the mapped channel",
-            "status": "predicted_from_dsp408"
+            "status": "observed_on_fir408_lan"
           },
           "slot_byte_2": {
             "offset_within_slot": 2,
@@ -8859,8 +8995,19 @@
             "note": "this is a proven GUI-driving model from emulator-to-original-GUI tests, not yet a proven physical DSP meter scale",
             "status": "predicted_from_dsp408"
           },
+          "physical_level_calibration": {
+            "raw_type": "u16le",
+            "formula": "level_db = max(-60.0, (raw_u16le - 15397.5257354183) / 21.1860578791)",
+            "api_rounding_decimals": 2,
+            "observed_range_db": "-59..+12",
+            "fit_rmse_db": 0.148,
+            "fit_max_error_db": 0.34,
+            "reference": "FIR408 internal 1 kHz sine with controlled input/output gain sweep",
+            "note": "This is an empirical runtime-meter scale. It is not yet an independently calibrated absolute dBFS reference.",
+            "status": "observed_on_fir408_lan"
+          },
           "not_yet_proven": [
-            "exact numeric scale of actual DSP runtime meter values",
+            "independent absolute dBFS reference of the internal test generator",
             "signedness",
             "peak vs RMS vs smoothed semantics",
             "exact semantic of slot byte 2"
@@ -8886,12 +9033,12 @@
             "setting payload[41] to 0xFF in the emulator turned on all limiter indicators in the original GUI",
             "isolated output limiter checkbox tests established exact mapping bit0..bit7 => Out1..Out8"
           ],
-          "status": "predicted_from_dsp408"
+          "status": "observed_on_fir408_lan"
         },
         "observations": [
           "GUI continuously polls runtime meters with request payload 00 01 01 40",
-          "DSP/emulator answers with a 42-byte cmd 0x40 payload",
-          "payload layout is 4-byte header + 12 x 3-byte slot region + 2-byte tail",
+          "physical FIR408 answers with a 46-byte cmd 0x40 payload",
+          "payload layout is 4-byte header + 12 x 3-byte slot region + status/limiter bytes at offsets 40..41 + four FIR408-specific unknown bytes",
           "emulator GUI tests proved that per-channel meter movement is driven by slot bytes 0 and 1 of the mapped slot",
           "emulator GUI tests proved that payload[41] controls the output limiter indicators with exact bit-to-output mapping"
         ]
@@ -8979,7 +9126,7 @@
         }
       },
       "write": {
-        "status": "complete_write_layout_observed_fir408_ina_ind_gui_captures_type_labels_predicted_from_gui_order",
+        "status": "observed_fir408_ina_ind_complete_input_compressor_write_layout",
         "command": "0x30",
         "payload_structure": "00 01 10 30 <input_channel_index> <ratio_lo> <ratio_hi_or_zero> <attack_lo> <attack_hi> <release_lo> <release_hi> <knee_lo> <knee_hi_or_zero> <threshold_lo> <threshold_hi> <frequency_lo> <frequency_hi> <type_context_u8> <type_u8>",
         "field_order": [

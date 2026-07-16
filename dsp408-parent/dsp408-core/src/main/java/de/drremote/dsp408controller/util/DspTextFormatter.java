@@ -249,7 +249,7 @@ public final class DspTextFormatter {
                     continue;
                 }
                 sb.append(System.lineSeparator());
-                sb.append(formatPeqBandState("OPEQ", bandState, false));
+                sb.append(formatPeqBandState("OPEQ", bandState, true));
             }
         }
 
@@ -271,7 +271,12 @@ public final class DspTextFormatter {
             return "-";
         }
 
-        String routed = state.routedInput() == null ? "-" : state.routedInput().displayName();
+        String routed = state.routedInputsSnapshot().isEmpty()
+                ? "-"
+                : state.routedInputsSnapshot().stream()
+                        .sorted(java.util.Comparator.comparingInt(DspChannel::index))
+                        .map(DspChannel::displayName)
+                        .collect(java.util.stream.Collectors.joining("+"));
 
         return String.format(
                 Locale.ROOT,
@@ -419,7 +424,7 @@ public final class DspTextFormatter {
     private static String formatCompressorState(CompressorState state) {
         return String.format(
                 Locale.ROOT,
-                "COMP  Ratio=%-24s Attack=%-20s Release=%-20s Knee=%-18s Thresh=%s",
+                "COMP  Ratio=%-24s Attack=%-20s Release=%-20s Knee=%-18s Thresh=%-20s Freq=%-20s Type=%s",
                 formatValueWithStatus(
                         state.ratioLabel(),
                         state.ratioConfirmedFromDevice(),
@@ -444,6 +449,16 @@ public final class DspTextFormatter {
                         state.thresholdDb() == null ? null : String.format(Locale.ROOT, "%.1f dB", state.thresholdDb()),
                         state.thresholdConfirmedFromDevice(),
                         state.lastThresholdUpdateSource()
+                ),
+                formatValueWithStatus(
+                        state.frequencyHz() == null ? null : formatFrequency(state.frequencyHz()),
+                        state.frequencyConfirmedFromDevice(),
+                        state.lastFrequencyUpdateSource()
+                ),
+                formatValueWithStatus(
+                        state.typeLabel(),
+                        state.typeConfirmedFromDevice(),
+                        state.lastTypeUpdateSource()
                 )
         );
     }
@@ -451,7 +466,7 @@ public final class DspTextFormatter {
     private static String formatLimiterState(LimiterState state) {
         return String.format(
                 Locale.ROOT,
-                "LIMIT Attack=%-20s Release=%-20s Thresh=%-20s Runtime=%-16s Unknown=%s",
+                "LIMIT Attack=%-20s Release=%-20s Thresh=%-20s Runtime=%-16s Knee=%s",
                 formatValueWithStatus(
                         state.attackMs() == null ? null : String.format(Locale.ROOT, "%.0f ms", state.attackMs()),
                         state.attackConfirmedFromDevice(),
@@ -473,9 +488,9 @@ public final class DspTextFormatter {
                         state.lastRuntimeUpdateSource()
                 ),
                 formatValueWithStatus(
-                        state.unknownValue() == null ? null : String.format(Locale.ROOT, "0x%04X", state.unknownValue()),
-                        state.unknownConfirmedFromDevice(),
-                        state.lastUnknownUpdateSource()
+                        state.kneeDb() == null ? null : String.format(Locale.ROOT, "%.0f dB", state.kneeDb()),
+                        state.kneeConfirmedFromDevice(),
+                        state.lastKneeUpdateSource()
                 )
         );
     }
@@ -487,7 +502,7 @@ public final class DspTextFormatter {
         return value + "[" + confirmation(confirmed) + ":" + source(source) + "]";
     }
 
-    private static String formatFrequency(Double hz) {
+    public static String formatFrequency(Double hz) {
         if (hz == null) {
             return "-";
         }

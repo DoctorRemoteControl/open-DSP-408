@@ -41,6 +41,8 @@ import de.drremote.dsp408.api.DspService;
                 "osgi.command.function=loadpreset",
                 "osgi.command.function=readpresetname",
                 "osgi.command.function=meters",
+                "osgi.command.function=meterstate",
+                "osgi.command.function=meter",
 
                 "osgi.command.function=blocks",
                 "osgi.command.function=readblock",
@@ -185,7 +187,9 @@ public final class Dsp408Command {
                   dsp408:loadpreset <F00|U01..U20>
                   dsp408:loadpreset <0..20>
                   dsp408:readpresetname <0..19>
-                  dsp408:meters
+                  dsp408:meters                  (read DSP now)
+                  dsp408:meterstate              (cached meters)
+                  dsp408:meter <channel>          (cached channel meter)
 
                 Blocks:
                   dsp408:blocks
@@ -259,8 +263,8 @@ public final class Dsp408Command {
                   dsp408:gatehold <inX> <holdMs>
                   dsp408:gateattack <inX> <attackMs>
                   dsp408:gaterelease <inX> <releaseMs>
-                  dsp408:compset <outX> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>
-                  dsp408:compget <outX>
+                  dsp408:compset <inX> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>
+                  dsp408:compget <inX>
                   dsp408:limitset <outX> <thresholdDb> <attackMs> <releaseMs>
                   dsp408:limitget <outX>
 
@@ -426,6 +430,15 @@ public final class Dsp408Command {
 
     public Object meters() throws Exception {
         return service.requestRuntimeMeters();
+    }
+
+    public Object meterstate() {
+        return service.getMeters();
+    }
+
+    public Object meter(String... args) {
+        requireArgs(args, 1, "Usage: dsp408:meter <channel>");
+        return service.getMeter(args[0]);
     }
 
     public Object blocks() throws Exception {
@@ -632,12 +645,12 @@ public final class Dsp408Command {
     }
 
     public Object compset(String... args) throws Exception {
-        requireArgs(args, 6, "Usage: dsp408:compset <outX> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>");
+        requireArgs(args, 6, "Usage: dsp408:compset <inX> <thresholdDb> <ratio> <attackMs> <releaseMs> <kneeDb>");
         return service.setCompressor(args[0], parseDouble(args[1]), args[2], parseDouble(args[3]), parseDouble(args[4]), parseDouble(args[5]));
     }
 
     public Object compget(String... args) throws Exception {
-        requireArgs(args, 1, "Usage: dsp408:compget <outX>");
+        requireArgs(args, 1, "Usage: dsp408:compget <inX>");
         return service.executeShell("compget " + args[0]);
     }
 
@@ -752,6 +765,8 @@ public final class Dsp408Command {
             case "loadpreset" -> loadPreset(target, args);
             case "readpresetname" -> target.readPresetName(parseInt(requiredArg(args, 0, "Usage: dsp408:dsp <id> readpresetname <0..19>")));
             case "meters" -> target.requestRuntimeMeters();
+            case "meterstate", "meterscached" -> target.getMeters();
+            case "meter" -> target.getMeter(requiredArg(args, 0, "Usage: dsp408:dsp <id> meter <channel>"));
             case "blocks" -> target.getCachedBlockIndices();
             case "readblock" -> target.readBlock(requiredArg(args, 0, "Usage: dsp408:dsp <id> readblock <hex>"));
             case "showblock", "block" -> target.getCachedBlock(requiredArg(args, 0, "Usage: dsp408:dsp <id> showblock <hex>"));

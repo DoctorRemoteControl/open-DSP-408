@@ -40,6 +40,46 @@ public interface DspService {
 
     ChannelDto getChannel(String channelId);
 
+    default List<InputGateDto> getInputGates() {
+        return List.of();
+    }
+
+    default List<InputCompressorDto> getInputCompressors() {
+        return List.of();
+    }
+
+    default InputCompressorDto getInputCompressor(String channelId) {
+        String requested = channelId == null ? "" : channelId.trim();
+        return getInputCompressors().stream()
+                .filter(compressor -> compressor.id().equalsIgnoreCase(requested))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Unknown input compressor channel: " + channelId));
+    }
+
+    default List<LimiterDto> getLimiters() {
+        return List.of();
+    }
+
+    default LimiterDto getLimiter(String channelId) {
+        String requested = channelId == null ? "" : channelId.trim();
+        return getLimiters().stream()
+                .filter(limiter -> limiter.id().equalsIgnoreCase(requested))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Unknown limiter output channel: " + channelId));
+    }
+
+    default MeterStateDto getMeters() {
+        return new MeterStateDto(List.of(), null, false, null);
+    }
+
+    default MeterDto getMeter(String channelId) {
+        String requested = channelId == null ? "" : channelId.trim();
+        return getMeters().channels().stream()
+                .filter(meter -> meter.id().equalsIgnoreCase(requested))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Unknown meter channel: " + channelId));
+    }
+
     ChannelDto setGain(String channelId, double db) throws Exception;
 
     ChannelDto mute(String channelId) throws Exception;
@@ -73,6 +113,8 @@ public interface DspService {
     ChannelDto setDelay(String channelId, double ms) throws Exception;
 
     RawTxDto setMatrixRoute(String outputId, String inputId) throws Exception;
+
+    RawTxDto setMatrixRoutes(String outputId, List<String> inputIds) throws Exception;
 
     RawTxDto setMatrixCrosspointGain(String outputId, String inputId, double db) throws Exception;
 
@@ -140,7 +182,7 @@ public interface DspService {
 
     RawTxDto setInputGateRelease(String channelId, double releaseMs) throws Exception;
 
-    RawTxDto setCompressor(String outputId, double thresholdDb, String ratioLabel, double attackMs, double releaseMs,
+    RawTxDto setCompressor(String inputId, double thresholdDb, String ratioLabel, double attackMs, double releaseMs,
                            double kneeDb) throws Exception;
 
     RawTxDto setLimiter(String outputId, double thresholdDb, double attackMs, double releaseMs) throws Exception;

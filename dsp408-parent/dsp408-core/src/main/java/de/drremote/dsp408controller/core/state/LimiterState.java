@@ -8,19 +8,19 @@ public final class LimiterState {
     private Double attackMs;
     private Double releaseMs;
     private Double thresholdDb;
-    private Integer unknownValue;
+    private Double kneeDb;
     private Boolean runtimeActive;
 
     private boolean attackConfirmedFromDevice;
     private boolean releaseConfirmedFromDevice;
     private boolean thresholdConfirmedFromDevice;
-    private boolean unknownConfirmedFromDevice;
+    private boolean kneeConfirmedFromDevice;
     private boolean runtimeConfirmedFromDevice;
 
     private String lastAttackUpdateSource;
     private String lastReleaseUpdateSource;
     private String lastThresholdUpdateSource;
-    private String lastUnknownUpdateSource;
+    private String lastKneeUpdateSource;
     private String lastRuntimeUpdateSource;
 
     public LimiterState(DspChannel output) {
@@ -43,8 +43,8 @@ public final class LimiterState {
         return thresholdDb;
     }
 
-    public synchronized Integer unknownValue() {
-        return unknownValue;
+    public synchronized Double kneeDb() {
+        return kneeDb;
     }
 
     public synchronized Boolean runtimeActive() {
@@ -63,8 +63,8 @@ public final class LimiterState {
         return thresholdConfirmedFromDevice;
     }
 
-    public synchronized boolean unknownConfirmedFromDevice() {
-        return unknownConfirmedFromDevice;
+    public synchronized boolean kneeConfirmedFromDevice() {
+        return kneeConfirmedFromDevice;
     }
 
     public synchronized boolean runtimeConfirmedFromDevice() {
@@ -83,8 +83,8 @@ public final class LimiterState {
         return lastThresholdUpdateSource;
     }
 
-    public synchronized String lastUnknownUpdateSource() {
-        return lastUnknownUpdateSource;
+    public synchronized String lastKneeUpdateSource() {
+        return lastKneeUpdateSource;
     }
 
     public synchronized String lastRuntimeUpdateSource() {
@@ -95,7 +95,7 @@ public final class LimiterState {
         return attackMs != null
                 || releaseMs != null
                 || thresholdDb != null
-                || unknownValue != null
+                || kneeDb != null
                 || runtimeActive != null;
     }
 
@@ -117,10 +117,10 @@ public final class LimiterState {
         this.thresholdConfirmedFromDevice = confirmed;
     }
 
-    public synchronized void updateUnknown(Integer unknownValue, String source, boolean confirmed) {
-        this.unknownValue = unknownValue;
-        this.lastUnknownUpdateSource = source;
-        this.unknownConfirmedFromDevice = confirmed;
+    public synchronized void updateKnee(Double kneeDb, String source, boolean confirmed) {
+        this.kneeDb = kneeDb;
+        this.lastKneeUpdateSource = source;
+        this.kneeConfirmedFromDevice = confirmed;
     }
 
     public synchronized void updateRuntimeActive(Boolean runtimeActive, String source, boolean confirmed) {

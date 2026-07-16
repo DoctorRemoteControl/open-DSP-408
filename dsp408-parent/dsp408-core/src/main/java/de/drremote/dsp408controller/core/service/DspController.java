@@ -10,6 +10,7 @@ import de.drremote.dsp408controller.core.codec.DspCodecRegistry;
 import de.drremote.dsp408controller.core.decode.DspPayloadRouter;
 import de.drremote.dsp408controller.core.library.DspLibrary;
 import de.drremote.dsp408controller.core.library.DspLibraryLoader;
+import de.drremote.dsp408controller.core.library.DspWriteCapabilities.Operation;
 import de.drremote.dsp408controller.core.library.OutputPeqBandDefaults;
 import de.drremote.dsp408controller.core.net.DspClient;
 import de.drremote.dsp408controller.core.net.DspConnectionConfig;
@@ -21,6 +22,7 @@ import de.drremote.dsp408controller.core.protocol.FirProcessingMode;
 import de.drremote.dsp408controller.core.protocol.FirWindowFunction;
 import de.drremote.dsp408controller.core.protocol.PeqFilterType;
 import de.drremote.dsp408controller.core.state.CrossoverFilterState;
+import de.drremote.dsp408controller.core.state.CompressorState;
 import de.drremote.dsp408controller.core.state.DspState;
 import de.drremote.dsp408controller.core.state.InputGateState;
 import de.drremote.dsp408controller.core.state.PeqBandState;
@@ -79,6 +81,18 @@ public final class DspController {
 
 	public int maxParameterBlockIndex() {
 		return library.maxParameterBlockIndex();
+	}
+
+	public boolean meterChannelMappingConfirmed() {
+		return library.meterLayout().channelMappingConfirmed();
+	}
+
+	public boolean meterLevelCalibrationConfirmed() {
+		return library.meterLayout().levelCalibrationConfirmed();
+	}
+
+	public boolean meterLimiterMappingConfirmed() {
+		return library.meterLayout().limiterMappingConfirmed();
 	}
 
 	public boolean hasFirFeatures() {
@@ -154,6 +168,7 @@ public final class DspController {
 	}
 
 	public void setPhase(DspChannel channel, boolean inverted) throws IOException {
+		requireVerifiedWrite(Operation.PHASE, channel, "Phase");
 		requireClient().setPhase(channel, inverted);
 		state.markPhase(channel, inverted, "tx");
 	}
@@ -205,6 +220,7 @@ public final class DspController {
 
 	public void setOutputPeqFrequency(DspChannel channel, int peqIndex, double hz) throws IOException {
 		requireOutput(channel);
+		requireVerifiedWrite(Operation.OUTPUT_PEQ, channel, "Output PEQ");
 		PeqBandState resolved = requireKnownOutputPeqBand(channel, peqIndex);
 		double normalizedFrequencyHz = DspCodecRegistry.peqFrequency()
 				.rawToDouble(DspCodecRegistry.peqFrequency().doubleToRaw(hz));
@@ -228,6 +244,7 @@ public final class DspController {
 
 	public void setOutputPeqQ(DspChannel channel, int peqIndex, double q) throws IOException {
 		requireOutput(channel);
+		requireVerifiedWrite(Operation.OUTPUT_PEQ, channel, "Output PEQ");
 		PeqBandState resolved = requireKnownOutputPeqBand(channel, peqIndex);
 		double normalizedQ = DspCodecRegistry.peqQ().rawToDouble(DspCodecRegistry.peqQ().doubleToRaw(q));
 
@@ -240,6 +257,7 @@ public final class DspController {
 
 	public void setOutputPeqGain(DspChannel channel, int peqIndex, double gainDb) throws IOException {
 		requireOutput(channel);
+		requireVerifiedWrite(Operation.OUTPUT_PEQ, channel, "Output PEQ");
 		PeqBandState resolved = requireKnownOutputPeqBand(channel, peqIndex);
 		double normalizedGain = DspCodecRegistry.peqGain().rawToDouble(DspCodecRegistry.peqGain().doubleToRaw(gainDb));
 
@@ -252,6 +270,7 @@ public final class DspController {
 
 	public void setOutputPeqType(DspChannel channel, int peqIndex, PeqFilterType filterType) throws IOException {
 		requireOutput(channel);
+		requireVerifiedWrite(Operation.OUTPUT_PEQ, channel, "Output PEQ");
 		PeqBandState resolved = requireKnownOutputPeqBand(channel, peqIndex);
 
 		requireClient().setOutputPeq(outputNumber(channel), peqIndex, resolved.gainDb(), resolved.frequencyHz(),
@@ -264,6 +283,7 @@ public final class DspController {
 	public void setOutputPeq(DspChannel channel, int peqIndex, PeqFilterType filterType, double frequencyHz, double q,
 			double gainDb) throws IOException {
 		requireOutput(channel);
+		requireVerifiedWrite(Operation.OUTPUT_PEQ, channel, "Output PEQ");
 		if (peqIndex < 1 || peqIndex > 9) {
 			throw new IllegalArgumentException("PEQ index must be in range 1..9");
 		}
@@ -283,6 +303,7 @@ public final class DspController {
 	public void setInputPeq(DspChannel channel, int peqIndex, PeqFilterType filterType, double frequencyHz, double q,
 			double gainDb, boolean bypass) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_PEQ, channel, "Input PEQ");
 		checkInputPeqIndex(peqIndex);
 
 		double normalizedFrequencyHz = DspCodecRegistry.peqFrequency()
@@ -299,6 +320,7 @@ public final class DspController {
 
 	public void setInputPeqGain(DspChannel channel, int peqIndex, double gainDb) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_PEQ, channel, "Input PEQ");
 		checkInputPeqIndex(peqIndex);
 		PeqBandState resolved = requireKnownInputPeqBand(channel, peqIndex);
 		double normalizedGain = DspCodecRegistry.peqGain().rawToDouble(DspCodecRegistry.peqGain().doubleToRaw(gainDb));
@@ -312,6 +334,7 @@ public final class DspController {
 
 	public void setInputPeqFrequency(DspChannel channel, int peqIndex, double frequencyHz) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_PEQ, channel, "Input PEQ");
 		checkInputPeqIndex(peqIndex);
 		PeqBandState resolved = requireKnownInputPeqBand(channel, peqIndex);
 		double normalizedFrequencyHz = DspCodecRegistry.peqFrequency()
@@ -326,6 +349,7 @@ public final class DspController {
 
 	public void setInputPeqQ(DspChannel channel, int peqIndex, double q) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_PEQ, channel, "Input PEQ");
 		checkInputPeqIndex(peqIndex);
 		PeqBandState resolved = requireKnownInputPeqBand(channel, peqIndex);
 		double normalizedQ = DspCodecRegistry.peqQ().rawToDouble(DspCodecRegistry.peqQ().doubleToRaw(q));
@@ -339,6 +363,7 @@ public final class DspController {
 
 	public void setInputPeqType(DspChannel channel, int peqIndex, PeqFilterType filterType) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_PEQ, channel, "Input PEQ");
 		checkInputPeqIndex(peqIndex);
 		PeqBandState resolved = requireKnownInputPeqBand(channel, peqIndex);
 
@@ -351,6 +376,7 @@ public final class DspController {
 
 	public void setInputPeqBypass(DspChannel channel, int peqIndex, boolean bypass) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_PEQ, channel, "Input PEQ");
 		checkInputPeqIndex(peqIndex);
 		PeqBandState resolved = requireKnownInputPeqBand(channel, peqIndex);
 
@@ -363,6 +389,7 @@ public final class DspController {
 
 	public void setInputGeq(DspChannel channel, int bandIndex, double gainDb) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_GEQ, channel, "Input GEQ");
 		checkInputGeqBandIndex(bandIndex);
 
 		double normalizedGain = DspCodecRegistry.peqGain().rawToDouble(DspCodecRegistry.peqGain().doubleToRaw(gainDb));
@@ -375,6 +402,7 @@ public final class DspController {
 	public void setFirProcessingMode(DspChannel output, FirProcessingMode mode) throws IOException {
 		requireFirLibrary();
 		requireOutputChannel(output);
+		requireVerifiedWrite(Operation.FIR_PROCESSING_MODE, output, "FIR processing mode");
 		requireClient().setFirProcessingMode(output, mode);
 	}
 
@@ -382,6 +410,7 @@ public final class DspController {
 			double highPassFrequencyHz, double lowPassFrequencyHz, int taps) throws IOException {
 		requireFirLibrary();
 		requireOutputChannel(output);
+		requireVerifiedWrite(Operation.FIR_GENERATOR, output, "FIR generator");
 
 		double normalizedHighPass = DspCodecRegistry.peqFrequency()
 				.rawToDouble(DspCodecRegistry.peqFrequency().doubleToRaw(highPassFrequencyHz));
@@ -395,6 +424,7 @@ public final class DspController {
 	public List<byte[]> uploadExternalFir(DspChannel channel, String name, double[] coefficients) throws IOException {
 		requireFirLibrary();
 		requireAnyChannel(channel);
+		requireVerifiedWrite(Operation.EXTERNAL_FIR_UPLOAD, channel, "External FIR upload");
 
 		boolean includeBeginCommand = channel.index() < 4;
 		List<byte[]> payloads = DspProtocol.buildExternalFirUpload(channel, name, coefficients, includeBeginCommand);
@@ -408,6 +438,7 @@ public final class DspController {
 	public void setInputGate(DspChannel channel, double thresholdDb, double holdMs, double attackMs, double releaseMs)
 			throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_GATE, channel, "Input gate");
 
 		double normalizedThresholdDb = DspCodecRegistry
 				.rawToDynamicsThresholdDb(DspCodecRegistry.dynamicsThresholdDbToRaw(thresholdDb, -90.0, 0.0));
@@ -427,33 +458,46 @@ public final class DspController {
 
 	public void setInputGateThreshold(DspChannel channel, double thresholdDb) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_GATE, channel, "Input gate");
 		InputGateState resolved = requireKnownInputGate(channel);
 		setInputGate(channel, thresholdDb, resolved.holdMs(), resolved.attackMs(), resolved.releaseMs());
 	}
 
 	public void setInputGateHold(DspChannel channel, double holdMs) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_GATE, channel, "Input gate");
 		InputGateState resolved = requireKnownInputGate(channel);
 		setInputGate(channel, resolved.thresholdDb(), holdMs, resolved.attackMs(), resolved.releaseMs());
 	}
 
 	public void setInputGateAttack(DspChannel channel, double attackMs) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_GATE, channel, "Input gate");
 		InputGateState resolved = requireKnownInputGate(channel);
 		setInputGate(channel, resolved.thresholdDb(), resolved.holdMs(), attackMs, resolved.releaseMs());
 	}
 
 	public void setInputGateRelease(DspChannel channel, double releaseMs) throws IOException {
 		requireInput(channel);
+		requireVerifiedWrite(Operation.INPUT_GATE, channel, "Input gate");
 		InputGateState resolved = requireKnownInputGate(channel);
 		setInputGate(channel, resolved.thresholdDb(), resolved.holdMs(), resolved.attackMs(), releaseMs);
 	}
 
 	public void setMatrixRoute(DspChannel output, DspChannel input) throws IOException {
+		setMatrixRoutes(output, java.util.List.of(input));
+	}
+
+	public void setMatrixRoutes(DspChannel output, java.util.Collection<DspChannel> inputs) throws IOException {
 		requireOutputChannel(output);
-		requireInput(input);
-		requireClient().setMatrixRoute(output, input);
-		state.markMatrixRoute(output, input);
+		if (inputs == null) {
+			throw new IllegalArgumentException("Matrix inputs are required");
+		}
+		for (DspChannel input : inputs) {
+			requireInput(input);
+		}
+		requireClient().setMatrixRoutes(output, inputs);
+		state.markMatrixRoutes(output, inputs);
 	}
 
 	public void setMatrixCrosspointGain(DspChannel output, DspChannel input, double db) throws IOException {
@@ -468,6 +512,7 @@ public final class DspController {
 	public void setCrossoverHighPass(DspChannel channel, double frequencyHz, CrossoverSlope slope, boolean bypass)
 			throws IOException {
 		requireAnyChannel(channel);
+		requireVerifiedWrite(Operation.CROSSOVER_HIGH_PASS, channel, "High-pass crossover");
 		double normalizedFrequencyHz = DspCodecRegistry.peqFrequency()
 				.rawToDouble(DspCodecRegistry.peqFrequency().doubleToRaw(frequencyHz));
 		requireClient().setCrossoverHighPass(channel, normalizedFrequencyHz, slope, bypass);
@@ -476,6 +521,7 @@ public final class DspController {
 
 	public void setCrossoverHighPassFrequency(DspChannel channel, double frequencyHz) throws IOException {
 		requireAnyChannel(channel);
+		requireVerifiedWrite(Operation.CROSSOVER_HIGH_PASS, channel, "High-pass crossover");
 		CrossoverFilterState resolved = requireKnownHighPass(channel);
 		double normalizedFrequencyHz = DspCodecRegistry.peqFrequency()
 				.rawToDouble(DspCodecRegistry.peqFrequency().doubleToRaw(frequencyHz));
@@ -486,6 +532,7 @@ public final class DspController {
 
 	public void setCrossoverHighPassSlope(DspChannel channel, CrossoverSlope slope) throws IOException {
 		requireAnyChannel(channel);
+		requireVerifiedWrite(Operation.CROSSOVER_HIGH_PASS, channel, "High-pass crossover");
 		CrossoverFilterState resolved = requireKnownHighPass(channel);
 		requireClient().setCrossoverHighPass(channel, resolved.frequencyHz(), slope, resolved.bypass());
 		state.markCrossoverHighPass(channel, resolved.frequencyHz(), slope, resolved.bypass(), "tx");
@@ -493,6 +540,7 @@ public final class DspController {
 
 	public void setCrossoverHighPassBypass(DspChannel channel, boolean bypass) throws IOException {
 		requireAnyChannel(channel);
+		requireVerifiedWrite(Operation.CROSSOVER_HIGH_PASS, channel, "High-pass crossover");
 		CrossoverFilterState resolved = requireKnownHighPass(channel);
 		requireClient().setCrossoverHighPass(channel, resolved.frequencyHz(), resolvedSlopeForWrite(resolved), bypass);
 		state.markCrossoverHighPass(channel, resolved.frequencyHz(), resolved.slope(), bypass, "tx");
@@ -501,6 +549,7 @@ public final class DspController {
 	public void setCrossoverLowPass(DspChannel channel, double frequencyHz, CrossoverSlope slope, boolean bypass)
 			throws IOException {
 		requireAnyChannel(channel);
+		requireVerifiedWrite(Operation.CROSSOVER_LOW_PASS, channel, "Low-pass crossover");
 		double normalizedFrequencyHz = DspCodecRegistry.peqFrequency()
 				.rawToDouble(DspCodecRegistry.peqFrequency().doubleToRaw(frequencyHz));
 		requireClient().setCrossoverLowPass(channel, normalizedFrequencyHz, slope, bypass);
@@ -509,6 +558,7 @@ public final class DspController {
 
 	public void setCrossoverLowPassFrequency(DspChannel channel, double frequencyHz) throws IOException {
 		requireAnyChannel(channel);
+		requireVerifiedWrite(Operation.CROSSOVER_LOW_PASS, channel, "Low-pass crossover");
 		CrossoverFilterState resolved = requireKnownLowPass(channel);
 		double normalizedFrequencyHz = DspCodecRegistry.peqFrequency()
 				.rawToDouble(DspCodecRegistry.peqFrequency().doubleToRaw(frequencyHz));
@@ -519,6 +569,7 @@ public final class DspController {
 
 	public void setCrossoverLowPassSlope(DspChannel channel, CrossoverSlope slope) throws IOException {
 		requireAnyChannel(channel);
+		requireVerifiedWrite(Operation.CROSSOVER_LOW_PASS, channel, "Low-pass crossover");
 		CrossoverFilterState resolved = requireKnownLowPass(channel);
 		requireClient().setCrossoverLowPass(channel, resolved.frequencyHz(), slope, resolved.bypass());
 		state.markCrossoverLowPass(channel, resolved.frequencyHz(), slope, resolved.bypass(), "tx");
@@ -526,17 +577,17 @@ public final class DspController {
 
 	public void setCrossoverLowPassBypass(DspChannel channel, boolean bypass) throws IOException {
 		requireAnyChannel(channel);
+		requireVerifiedWrite(Operation.CROSSOVER_LOW_PASS, channel, "Low-pass crossover");
 		CrossoverFilterState resolved = requireKnownLowPass(channel);
 		requireClient().setCrossoverLowPass(channel, resolved.frequencyHz(), resolvedSlopeForWrite(resolved), bypass);
 		state.markCrossoverLowPass(channel, resolved.frequencyHz(), resolved.slope(), bypass, "tx");
 	}
 
-	public void setCompressor(DspChannel output, double thresholdDb, String ratioLabel, double attackMs,
+	public void setCompressor(DspChannel input, double thresholdDb, String ratioLabel, double attackMs,
 			double releaseMs, double kneeDb) throws IOException {
-		requireOutputChannel(output);
-		if (!library.hasOutputCompressorLocations()) {
-			throw new UnsupportedDspOperationException("Output compressor is not available in " + library.libraryType());
-		}
+		requireInput(input);
+		requireVerifiedWrite(Operation.INPUT_COMPRESSOR, input, "Input compressor");
+		CompressorState existing = requireKnownInputCompressor(input);
 
 		int ratioRaw = DspProtocol.compressorRatioLabelToRaw(ratioLabel);
 		String normalizedRatioLabel = library.compressorRatioName(ratioRaw);
@@ -552,18 +603,28 @@ public final class DspController {
 		double normalizedThresholdDb = DspCodecRegistry
 				.rawToDynamicsThresholdDb(DspCodecRegistry.dynamicsThresholdDbToRaw(thresholdDb, -90.0, 20.0));
 
-		requireClient().setCompressor(output, normalizedRatioLabel, normalizedAttackMs, normalizedReleaseMs,
-				normalizedKneeDb, normalizedThresholdDb);
+		requireClient().setInputCompressor(
+				input,
+				ratioRaw,
+				DspCodecRegistry.dynamicsTimeMsToRaw(normalizedAttackMs, 1.0, 999.0),
+				DspCodecRegistry.dynamicsTimeMsToRaw(normalizedReleaseMs, 10.0, 3000.0),
+				(int) Math.round(normalizedKneeDb),
+				DspCodecRegistry.dynamicsThresholdDbToRaw(normalizedThresholdDb, -90.0, 20.0),
+				DspCodecRegistry.peqFrequency().doubleToRaw(existing.frequencyHz()),
+				existing.typeContextRaw(),
+				existing.typeRaw()
+		);
 
-		state.markCompressor(output, ratioRaw, normalizedRatioLabel, normalizedAttackMs, normalizedReleaseMs,
-				normalizedKneeDb, normalizedThresholdDb, "tx");
+		state.markCompressor(input, ratioRaw, normalizedRatioLabel, normalizedAttackMs, normalizedReleaseMs,
+				normalizedKneeDb, normalizedThresholdDb, existing.frequencyHz(), existing.typeContextRaw(),
+				existing.typeRaw(), existing.typeLabel(), "tx");
 	}
 
 	public void setLimiter(DspChannel output, double thresholdDb, double attackMs, double releaseMs)
 			throws IOException {
 		requireOutputChannel(output);
 
-		int unknownRaw = resolveLimiterUnknownRaw(output);
+		int kneeRaw = resolveLimiterKneeRaw(output);
 		double normalizedAttackMs = DspCodecRegistry
 				.rawToDynamicsTimeMs(DspCodecRegistry.dynamicsTimeMsToRaw(attackMs, 1.0, 999.0));
 		double normalizedReleaseMs = DspCodecRegistry
@@ -571,9 +632,9 @@ public final class DspController {
 		double normalizedThresholdDb = DspCodecRegistry
 				.rawToDynamicsThresholdDb(DspCodecRegistry.dynamicsThresholdDbToRaw(thresholdDb, -90.0, 20.0));
 
-		requireClient().setLimiter(output, normalizedAttackMs, normalizedReleaseMs, unknownRaw, normalizedThresholdDb);
+		requireClient().setLimiter(output, normalizedAttackMs, normalizedReleaseMs, kneeRaw, normalizedThresholdDb);
 
-		state.markLimiter(output, normalizedAttackMs, normalizedReleaseMs, unknownRaw, normalizedThresholdDb, "tx");
+		state.markLimiter(output, normalizedAttackMs, normalizedReleaseMs, kneeRaw, normalizedThresholdDb, "tx");
 	}
 
 	public void enableTestTone(double frequencyHz) throws IOException {
@@ -614,6 +675,16 @@ public final class DspController {
 	private void requireFirLibrary() {
 		if (!library.hasFirFeatures()) {
 			throw new UnsupportedDspOperationException("FIR features are not available in " + library.libraryType());
+		}
+	}
+
+	private void requireVerifiedWrite(Operation operation, DspChannel channel, String label) {
+		if (!library.writeCapabilities().supports(operation, channel)) {
+			throw new UnsupportedDspOperationException(
+					label + " write is not verified for " + channel.displayName() + " in "
+							+ library.libraryType()
+							+ ". Use rawhex only for an explicit unsafe protocol test."
+			);
 		}
 	}
 
@@ -801,6 +872,17 @@ public final class DspController {
 		return existing;
 	}
 
+	private CompressorState requireKnownInputCompressor(DspChannel channel) {
+		CompressorState existing = state.compressor(channel);
+		if (existing == null || existing.frequencyHz() == null || existing.typeContextRaw() == null
+				|| existing.typeRaw() == null || existing.typeLabel() == null) {
+			throw new IllegalStateException(
+					"Input compressor state incomplete. Run scanblocks first so frequency and type are preserved."
+			);
+		}
+		return existing;
+	}
+
 	private double requireKnownInputGeqFrequency(int bandIndex) {
 		Double frequencyHz = library.inputGeqBandFrequency(bandIndex);
 		if (frequencyHz == null) {
@@ -809,9 +891,9 @@ public final class DspController {
 		return frequencyHz;
 	}
 	
-	private int resolveLimiterUnknownRaw(DspChannel output) {
-		Integer known = state.limiter(output) == null ? null : state.limiter(output).unknownValue();
-		return known == null ? 0 : known;
+	private int resolveLimiterKneeRaw(DspChannel output) {
+		Double known = state.limiter(output) == null ? null : state.limiter(output).kneeDb();
+		return known == null || known < 0 || known > 12 ? 0 : (int) Math.round(known);
 	}
 
 }

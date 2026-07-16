@@ -548,6 +548,8 @@ GET  /deviceinfo
 GET  /info
 GET  /channels
 GET  /channels/{channelId}
+GET  /channels/{channelId}/meter
+GET  /meters
 GET  /blocks
 GET  /blocks/{blockIndex}
 ```
@@ -566,6 +568,9 @@ POST /blocks/scan
 POST /scanblocks
 POST /refresh
 POST /device/login
+POST /preset/validate
+POST /preset/apply
+POST /meters/read
 POST /raw
 ```
 
@@ -590,6 +595,9 @@ POST /volume/step
 curl http://localhost:8181/api/v1/health
 curl http://localhost:8181/api/v1/state
 curl http://localhost:8181/api/v1/channels/out1
+curl http://localhost:8181/api/v1/meters
+curl http://localhost:8181/api/v1/channels/out1/meter
+curl -X POST http://localhost:8181/api/v1/meters/read
 curl -X POST http://localhost:8181/api/v1/connection/connect
 curl -X POST http://localhost:8181/api/v1/channels/out1/mute
 curl -X POST http://localhost:8181/api/v1/channels/out1/gain \
@@ -666,6 +674,24 @@ curl -X POST http://localhost:8181/api/v1/volume/set \
   -H 'Content-Type: application/json' \
   -d '{"db": 0}'
 ```
+
+### Validate and apply a complete JSON preset
+
+```bash
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  --data-binary '@preset.json' \
+  http://localhost:8181/api/v1/dsps/fir408/preset/validate
+
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  --data-binary '@preset.json' \
+  http://localhost:8181/api/v1/dsps/fir408/preset/apply
+```
+
+The apply endpoint validates the complete document and then mutes all inputs
+and outputs before writing settings. Channels marked `unmuteAfterApply` remain
+muted unless the request explicitly uses `?unmuteSelected=true`.
 
 ---
 
@@ -752,6 +778,9 @@ Commands must start with:
 !dsp dsps
 !dsp connect
 !dsp state
+!dsp meters
+!dsp meterstate
+!dsp meter out1
 !dsp dsp fir408 state
 !dsp dsp normal408 gain out1 -10
 !dsp gain ina -10
@@ -845,6 +874,9 @@ connection.disconnect
 connection.reconnect
 device.info.get
 state.get
+meters.read
+meters.get
+meter.get
 blocks.scan
 block.read
 channel.get
@@ -864,6 +896,9 @@ fir.upload
 | `connection.connect` | `!dsp connect`                                      |
 | `device.info.get`    | `!dsp deviceinfo`                                   |
 | `state.get`          | `!dsp state`                                        |
+| `meters.read`        | `!dsp meters`                                       |
+| `meters.get`         | `!dsp meterstate`                                   |
+| `meter.get`          | `!dsp meter <channelId>`                            |
 | `blocks.scan`        | `!dsp scanblocks`                                   |
 | `block.read`         | `!dsp readblock <blockIndex>`                       |
 | `channel.get`        | `!dsp get <channelId>`                              |

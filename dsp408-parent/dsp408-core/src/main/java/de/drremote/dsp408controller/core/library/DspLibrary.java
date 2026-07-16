@@ -36,8 +36,10 @@ public final class DspLibrary {
     private final Map<Integer, List<CompressorChannelLocation>> compressorLocationsByBlock;
     private final Map<Integer, List<LimiterChannelLocation>> limiterLocationsByBlock;
     private final Map<Integer, String> compressorRatioNamesByRaw;
+    private final Map<Integer, String> inputCompressorTypeNamesByRaw;
     private final MeterLayout meterLayout;
     private final TestToneReadSpec testToneReadSpec;
+    private final DspWriteCapabilities writeCapabilities;
 
     private final MuteReadSpec muteReadSpec;
 
@@ -59,8 +61,10 @@ public final class DspLibrary {
                       Map<Integer, List<CompressorChannelLocation>> compressorLocationsByBlock,
                       Map<Integer, List<LimiterChannelLocation>> limiterLocationsByBlock,
                       Map<Integer, String> compressorRatioNamesByRaw,
+                      Map<Integer, String> inputCompressorTypeNamesByRaw,
                       MeterLayout meterLayout,
                       TestToneReadSpec testToneReadSpec,
+                      DspWriteCapabilities writeCapabilities,
                       MuteReadSpec muteReadSpec) {
         this.libraryType = libraryType == null || libraryType.isBlank() ? "unknown" : libraryType;
         this.maxParameterBlockIndex = maxParameterBlockIndex;
@@ -87,8 +91,10 @@ public final class DspLibrary {
         this.compressorLocationsByBlock = copyTypedLocationsByBlock(compressorLocationsByBlock);
         this.limiterLocationsByBlock = copyTypedLocationsByBlock(limiterLocationsByBlock);
         this.compressorRatioNamesByRaw = Map.copyOf(new HashMap<>(compressorRatioNamesByRaw));
+        this.inputCompressorTypeNamesByRaw = Map.copyOf(new HashMap<>(inputCompressorTypeNamesByRaw));
         this.meterLayout = meterLayout;
         this.testToneReadSpec = testToneReadSpec;
+        this.writeCapabilities = writeCapabilities;
 
         this.muteReadSpec = muteReadSpec;
     }
@@ -211,8 +217,12 @@ public final class DspLibrary {
         return compressorLocationsByBlock.getOrDefault(blockIndex, List.of());
     }
 
-    public boolean hasOutputCompressorLocations() {
+    public boolean hasCompressorLocations() {
         return !compressorLocationsByBlock.isEmpty();
+    }
+
+    public boolean hasInputCompressorLocations() {
+        return hasCompressorLocations();
     }
 
     public List<LimiterChannelLocation> limiterLocationsForBlock(int blockIndex) {
@@ -227,12 +237,20 @@ public final class DspLibrary {
         return compressorRatioNamesByRaw;
     }
 
+    public String inputCompressorTypeName(int raw) {
+        return inputCompressorTypeNamesByRaw.get(raw);
+    }
+
     public MeterLayout meterLayout() {
         return meterLayout;
     }
 
     public TestToneReadSpec testToneReadSpec() {
         return testToneReadSpec;
+    }
+
+    public DspWriteCapabilities writeCapabilities() {
+        return writeCapabilities;
     }
 
     public MuteReadSpec muteReadSpec() {

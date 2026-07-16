@@ -14,8 +14,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 
 import de.drremote.dsp408.api.DspService;
+import de.drremote.dsp408.api.InputGateDto;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -31,6 +33,7 @@ public final class DspApiServlet extends HttpServlet {
     private static final Logger LOG = LoggerFactory.getLogger(DspApiServlet.class);
 
     private final ObjectMapper mapper = new ObjectMapper();
+    private final JsonPresetApplier presetApplier = new JsonPresetApplier();
 
     @Reference
     private DspService dsp;
@@ -87,10 +90,60 @@ public final class DspApiServlet extends HttpServlet {
                 return;
             }
 
+            if (path.equals("/meters")) {
+                writeJson(resp, 200, Map.of(
+                        "dspId", dsp.dspId(),
+                        "connected", dsp.isConnected(),
+                        "meters", dsp.getMeters()
+                ));
+                return;
+            }
+
+            if (path.startsWith("/channels/") && path.endsWith("/meter")) {
+                String channelId = path.substring("/channels/".length(), path.length() - "/meter".length());
+                writeJson(resp, 200, Map.of(
+                        "dspId", dsp.dspId(),
+                        "connected", dsp.isConnected(),
+                        "meter", dsp.getMeter(channelId)
+                ));
+                return;
+            }
+
             if (path.equals("/channels")) {
                 writeJson(resp, 200, Map.of(
                         "connected", dsp.isConnected(),
                         "channels", dsp.getChannels()
+                ));
+                return;
+            }
+
+            if (path.startsWith("/channels/") && path.endsWith("/gate")) {
+                String channelId = path.substring("/channels/".length(), path.length() - "/gate".length());
+                InputGateDto gate = dsp.getInputGates().stream()
+                        .filter(value -> value.id().equalsIgnoreCase(channelId))
+                        .findFirst()
+                        .orElseThrow(() -> new IllegalArgumentException("Unknown input channel: " + channelId));
+                writeJson(resp, 200, Map.of(
+                        "connected", dsp.isConnected(),
+                        "gate", gate
+                ));
+                return;
+            }
+
+            if (path.startsWith("/channels/") && path.endsWith("/compressor")) {
+                String channelId = path.substring("/channels/".length(), path.length() - "/compressor".length());
+                writeJson(resp, 200, Map.of(
+                        "connected", dsp.isConnected(),
+                        "compressor", dsp.getInputCompressor(channelId)
+                ));
+                return;
+            }
+
+            if (path.startsWith("/channels/") && path.endsWith("/limiter")) {
+                String channelId = path.substring("/channels/".length(), path.length() - "/limiter".length());
+                writeJson(resp, 200, Map.of(
+                        "connected", dsp.isConnected(),
+                        "limiter", dsp.getLimiter(channelId)
                 ));
                 return;
             }
@@ -132,6 +185,8 @@ public final class DspApiServlet extends HttpServlet {
             }
 
             sendError(resp, 404, "not_found", "Unknown endpoint.");
+        } catch (UnsupportedOperationException e) {
+            sendError(resp, 409, "unsupported_operation", e.getMessage());
         } catch (IllegalArgumentException e) {
             sendError(resp, 422, "unprocessable_entity", e.getMessage());
         } catch (Exception e) {
@@ -190,6 +245,26 @@ public final class DspApiServlet extends HttpServlet {
                 return;
             }
 
+            if (path.equals("/preset/validate")) {
+                Map<String, Object> body = readJsonBody(req);
+                JsonPresetApplier.PresetPlan plan = presetApplier.validate(body);
+                writeJson(resp, 200, presetApplier.validationResponse(dsp.dspId(), plan));
+                return;
+            }
+
+            if (path.equals("/preset/apply")) {
+                Map<String, Object> body = readJsonBody(req);
+                JsonPresetApplier.PresetPlan plan = presetApplier.validate(body);
+                if (!dsp.isConnected()) {
+                    sendError(resp, 409, "dsp_not_connected", "DSP " + dsp.dspId() + " is not connected.");
+                    return;
+                }
+                boolean unmuteSelected = queryBoolean(req, "unmuteSelected", false);
+                boolean refresh = queryBoolean(req, "refresh", true);
+                writeJson(resp, 200, presetApplier.apply(dsp, plan, unmuteSelected, refresh));
+                return;
+            }
+
             if (path.equals("/delay-unit")) {
                 Map<String, Object> body = readJsonBody(req);
                 writeJson(resp, 200, dsp.setDelayUnit(requireString(body, "unit")));
@@ -203,7 +278,12 @@ public final class DspApiServlet extends HttpServlet {
 
             if (path.equals("/matrix/route")) {
                 Map<String, Object> body = readJsonBody(req);
-                writeJson(resp, 200, dsp.setMatrixRoute(requireString(body, "output"), requireString(body, "input")));
+                String output = requireString(body, "output");
+                if (body.containsKey("inputs")) {
+                    writeJson(resp, 200, dsp.setMatrixRoutes(output, requireStringList(body, "inputs")));
+                } else {
+                    writeJson(resp, 200, dsp.setMatrixRoute(output, requireString(body, "input")));
+                }
                 return;
             }
 
@@ -249,7 +329,7 @@ public final class DspApiServlet extends HttpServlet {
                 return;
             }
 
-            if (path.startsWith("/channels/") && path.endsWith("/gain")) {
+            if (isDirectChannelGainPath(path)) {
                 String channelId = path.substring("/channels/".length(), path.length() - "/gain".length());
                 Map<String, Object> body = readJsonBody(req);
                 double db = requireDouble(body, "db");
@@ -644,6 +724,13 @@ public final class DspApiServlet extends HttpServlet {
             }
 
             sendError(resp, 404, "not_found", "Unknown endpoint.");
+        } catch (JsonProcessingException e) {
+            sendError(resp, 400, "invalid_json", "Request body is not valid JSON.");
+        } catch (JsonPresetApplier.PresetApplyException e) {
+            RequestContext context = requestContext(req);
+            writeJson(resp, e.httpStatus(), e.response(context.dsp().dspId()));
+        } catch (UnsupportedOperationException e) {
+            sendError(resp, 409, "unsupported_operation", e.getMessage());
         } catch (IllegalArgumentException e) {
             sendError(resp, 422, "unprocessable_entity", e.getMessage());
         } catch (Exception e) {
@@ -674,7 +761,11 @@ public final class DspApiServlet extends HttpServlet {
                 "connected", dsp.isConnected(),
                 "deviceInfo", dsp.getDeviceInfo(),
                 "channels", dsp.getChannels(),
-                "cachedBlockIndices", dsp.getCachedBlockIndices()
+                "cachedBlockIndices", dsp.getCachedBlockIndices(),
+                "inputGates", dsp.getInputGates(),
+                "inputCompressors", dsp.getInputCompressors(),
+                "limiters", dsp.getLimiters(),
+                "meters", dsp.getMeters()
         );
     }
 
@@ -777,12 +868,32 @@ public final class DspApiServlet extends HttpServlet {
         return values;
     }
 
+    private List<String> requireStringList(Map<String, Object> body, String field) {
+        Object value = body.get(field);
+        if (!(value instanceof Iterable<?> iterable)) {
+            throw new IllegalArgumentException("Missing or invalid " + field + ".");
+        }
+        List<String> values = new ArrayList<>();
+        for (Object item : iterable) {
+            if (item == null || String.valueOf(item).isBlank()) {
+                throw new IllegalArgumentException(field + " must contain non-empty strings.");
+            }
+            values.add(String.valueOf(item).trim());
+        }
+        return List.copyOf(values);
+    }
+
     private boolean requireBoolean(Map<String, Object> body, String field) {
         Object value = body.get(field);
         if (value == null) {
             throw new IllegalArgumentException("Missing " + field + ".");
         }
         return toBoolean(value);
+    }
+
+    private boolean queryBoolean(HttpServletRequest req, String field, boolean fallback) {
+        String value = req.getParameter(field);
+        return value == null || value.isBlank() ? fallback : toBoolean(value);
     }
 
     private int toInt(Object value) {
@@ -820,6 +931,10 @@ public final class DspApiServlet extends HttpServlet {
             return "/";
         }
         return path.trim();
+    }
+
+    static boolean isDirectChannelGainPath(String path) {
+        return path != null && path.matches("/channels/[^/]+/gain");
     }
 
     private record RequestContext(DspService dsp, String path) {

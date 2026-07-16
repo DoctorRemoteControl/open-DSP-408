@@ -32,7 +32,7 @@ public final class CompressorBlockDecoder implements BlockDecoder {
         }
 
         for (CompressorChannelLocation location : locations) {
-            Integer ratioRaw = readUInt16LE(
+            Integer ratioRaw = readUInt8(
                     state.getBlock(location.ratio().blockIndex()),
                     location.ratio().dataOffset()
             );
@@ -44,7 +44,7 @@ public final class CompressorBlockDecoder implements BlockDecoder {
                     state.getBlock(location.release().blockIndex()),
                     location.release().dataOffset()
             );
-            Integer kneeRaw = readUInt16LE(
+            Integer kneeRaw = readUInt8(
                     state.getBlock(location.knee().blockIndex()),
                     location.knee().dataOffset()
             );
@@ -52,8 +52,21 @@ public final class CompressorBlockDecoder implements BlockDecoder {
                     state.getBlock(location.threshold().blockIndex()),
                     location.threshold().dataOffset()
             );
+            Integer frequencyRaw = readUInt16LE(
+                    state.getBlock(location.frequency().blockIndex()),
+                    location.frequency().dataOffset()
+            );
+            Integer typeContextRaw = readUInt8(
+                    state.getBlock(location.typeContext().blockIndex()),
+                    location.typeContext().dataOffset()
+            );
+            Integer typeRaw = readUInt8(
+                    state.getBlock(location.type().blockIndex()),
+                    location.type().dataOffset()
+            );
 
-            if (ratioRaw == null || attackRaw == null || releaseRaw == null || kneeRaw == null || thresholdRaw == null) {
+            if (ratioRaw == null || attackRaw == null || releaseRaw == null || kneeRaw == null
+                    || thresholdRaw == null || frequencyRaw == null || typeContextRaw == null || typeRaw == null) {
                 continue;
             }
 
@@ -66,10 +79,15 @@ public final class CompressorBlockDecoder implements BlockDecoder {
             double releaseMs = DspCodecRegistry.rawToDynamicsTimeMs(releaseRaw);
             double kneeDb = kneeRaw;
             double thresholdDb = DspCodecRegistry.rawToDynamicsThresholdDb(thresholdRaw);
+            double frequencyHz = DspCodecRegistry.peqFrequency().rawToDouble(frequencyRaw);
+            String typeLabel = library.inputCompressorTypeName(typeRaw);
+            if (typeLabel == null) {
+                typeLabel = "raw=" + typeRaw;
+            }
 
             String source = String.format(
                     Locale.ROOT,
-                    "comp blocks:%02X@%02X/%02X@%02X/%02X@%02X/%02X@%02X/%02X@%02X raw=%d/%d/%d/%d/%d",
+                    "input-comp blocks:%02X@%02X/%02X@%02X/%02X@%02X/%02X@%02X/%02X@%02X/%02X@%02X/%02X@%02X/%02X@%02X raw=%d/%d/%d/%d/%d/%d/%d/%d",
                     location.ratio().blockIndex(),
                     location.ratio().dataOffset(),
                     location.attack().blockIndex(),
@@ -80,11 +98,20 @@ public final class CompressorBlockDecoder implements BlockDecoder {
                     location.knee().dataOffset(),
                     location.threshold().blockIndex(),
                     location.threshold().dataOffset(),
+                    location.frequency().blockIndex(),
+                    location.frequency().dataOffset(),
+                    location.typeContext().blockIndex(),
+                    location.typeContext().dataOffset(),
+                    location.type().blockIndex(),
+                    location.type().dataOffset(),
                     ratioRaw,
                     attackRaw,
                     releaseRaw,
                     kneeRaw,
-                    thresholdRaw
+                    thresholdRaw,
+                    frequencyRaw,
+                    typeContextRaw,
+                    typeRaw
             );
 
             state.markCompressorFromDevice(
@@ -95,19 +122,25 @@ public final class CompressorBlockDecoder implements BlockDecoder {
                     releaseMs,
                     kneeDb,
                     thresholdDb,
+                    frequencyHz,
+                    typeContextRaw,
+                    typeRaw,
+                    typeLabel,
                     source
             );
 
             if (log != null) {
                 log.accept(String.format(
                         Locale.ROOT,
-                        "COMP RX %s -> ratio=%s attack=%.0f ms release=%.0f ms knee=%.1f dB threshold=%.1f dB",
+                        "INPUT COMP RX %s -> ratio=%s attack=%.0f ms release=%.0f ms knee=%.1f dB threshold=%.1f dB freq=%.2f Hz type=%s",
                         location.channel().displayName(),
                         ratioLabel,
                         attackMs,
                         releaseMs,
                         kneeDb,
-                        thresholdDb
+                        thresholdDb,
+                        frequencyHz,
+                        typeLabel
                 ));
             }
         }
@@ -118,5 +151,12 @@ public final class CompressorBlockDecoder implements BlockDecoder {
             return null;
         }
         return (data[offset] & 0xFF) | ((data[offset + 1] & 0xFF) << 8);
+    }
+
+    private static Integer readUInt8(byte[] data, int offset) {
+        if (data == null || offset < 0 || data.length <= offset) {
+            return null;
+        }
+        return data[offset] & 0xFF;
     }
 }

@@ -5,12 +5,16 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import de.drremote.dsp408controller.core.library.DspWriteCapabilities.Operation;
 import de.drremote.dsp408controller.core.protocol.DspChannel;
 import de.drremote.dsp408controller.core.protocol.PeqFilterType;
 
@@ -107,8 +111,10 @@ public final class DspLibraryLoader {
         Map<Integer, List<CompressorChannelLocation>> compressorLocations = parseCompressorLocations(root);
         Map<Integer, List<LimiterChannelLocation>> limiterLocations = parseLimiterLocations(root);
         Map<Integer, String> compressorRatiosByRaw = parseCompressorRatios(root);
+        Map<Integer, String> inputCompressorTypesByRaw = parseInputCompressorTypes(root);
         MeterLayout meterLayout = parseMeterLayout(root);
         TestToneReadSpec testToneReadSpec = parseTestToneReadSpec(root);
+        DspWriteCapabilities writeCapabilities = parseWriteCapabilities(root);
 
         MuteReadSpec muteReadSpec = parseMuteReadSpec(root);
 
@@ -131,14 +137,133 @@ public final class DspLibraryLoader {
                 compressorLocations,
                 limiterLocations,
                 compressorRatiosByRaw,
+                inputCompressorTypesByRaw,
                 meterLayout,
                 testToneReadSpec,
+                writeCapabilities,
                 muteReadSpec
         );
     }
 
+    private static DspWriteCapabilities parseWriteCapabilities(JsonNode root) {
+        if (!requiresStrictEvidence(root)) {
+            return DspWriteCapabilities.permissive();
+        }
+
+        Map<Operation, Set<DspChannel>> supported = new EnumMap<>(Operation.class);
+        JsonNode parameters = required(root, "parameters");
+
+        supported.put(Operation.PHASE, confirmedChannelKeys(
+                parameters.path("phase").path("write").path("channel_index_mapping"),
+                parameters.path("phase").path("write")
+        ));
+
+        JsonNode outputPeqMap = parameters.path("peq_output").path("write").path("channel_index_full_map");
+        supported.put(Operation.OUTPUT_PEQ, confirmedChannelKeys(outputPeqMap, outputPeqMap));
+
+        JsonNode inputPeqChannels = parameters.path("peq_input").path("write")
+                .path("predicted_all_inputs").path("inputs");
+        supported.put(Operation.INPUT_PEQ, individuallyConfirmedChannelKeys(inputPeqChannels));
+
+        supported.put(Operation.INPUT_GEQ, Set.of());
+
+        JsonNode inputGateChannels = parameters.path("gate").path("write")
+                .path("write_templates_by_input").path("inputs");
+        supported.put(Operation.INPUT_GATE, individuallyConfirmedChannelKeys(inputGateChannels));
+
+        supported.put(Operation.CROSSOVER_HIGH_PASS, confirmedLinearOutputCrossoverChannels(
+                parameters.path("crossover").path("write").path("high_pass")
+        ));
+        supported.put(Operation.CROSSOVER_LOW_PASS, confirmedLinearOutputCrossoverChannels(
+                parameters.path("crossover").path("write").path("low_pass")
+        ));
+
+        JsonNode compressorWrite = parameters.path("input_compressor").path("write");
+        supported.put(Operation.INPUT_COMPRESSOR, readEvidenceAllowed(root, compressorWrite)
+                ? individuallyConfirmedChannelKeys(compressorWrite.path("predicted_all_inputs").path("inputs"))
+                : Set.of());
+
+        EnumSet<DspChannel> firModes = EnumSet.noneOf(DspChannel.class);
+        JsonNode firModeWrite = parameters.path("fir_processing_mode").path("write");
+        if (readEvidenceAllowed(root, firModeWrite.path("fresh_out1_mode_toggle_capture"))) {
+            firModes.add(DspChannel.OUT_1);
+        }
+        if (readEvidenceAllowed(root, firModeWrite.path("fresh_out8_mode_toggle_capture"))) {
+            firModes.add(DspChannel.OUT_8);
+        }
+        if (firModes.contains(DspChannel.OUT_1) && firModes.contains(DspChannel.OUT_8)) {
+            firModes.addAll(EnumSet.range(DspChannel.OUT_1, DspChannel.OUT_8));
+        }
+        supported.put(Operation.FIR_PROCESSING_MODE, firModes);
+
+        JsonNode firGeneratorChannels = parameters.path("fir_generator").path("read_storage")
+                .path("full_output_read_map").path("outputs");
+        supported.put(Operation.FIR_GENERATOR, individuallyConfirmedChannelKeys(firGeneratorChannels));
+
+        JsonNode externalFirSelectors = parameters.path("external_fir_upload")
+                .path("selector_interpretation");
+        supported.put(Operation.EXTERNAL_FIR_UPLOAD,
+                readEvidenceAllowed(root, externalFirSelectors)
+                        ? channelKeys(externalFirSelectors.path("observed_selector_map"))
+                        : Set.of());
+
+        return new DspWriteCapabilities(supported);
+    }
+
+    private static Set<DspChannel> confirmedChannelKeys(JsonNode channels, JsonNode evidenceNode) {
+        return evidenceStatusConfirmed(evidenceNode.path("status").asText(null))
+                ? channelKeys(channels)
+                : Set.of();
+    }
+
+    private static Set<DspChannel> individuallyConfirmedChannelKeys(JsonNode channels) {
+        EnumSet<DspChannel> result = EnumSet.noneOf(DspChannel.class);
+        if (channels == null || !channels.isObject()) {
+            return result;
+        }
+        channels.fields().forEachRemaining(entry -> {
+            if (evidenceStatusConfirmed(entry.getValue().path("status").asText(null))) {
+                addChannel(result, entry.getKey());
+            }
+        });
+        return result;
+    }
+
+    private static Set<DspChannel> confirmedLinearOutputCrossoverChannels(JsonNode writeNode) {
+        if (!evidenceStatusConfirmed(writeNode.path("status").asText(null))) {
+            return Set.of();
+        }
+
+        Set<DspChannel> observed = channelKeys(writeNode.path("output_channel_index_observed"));
+        if (!observed.contains(DspChannel.OUT_1) || !observed.contains(DspChannel.OUT_8)) {
+            return observed;
+        }
+
+        return EnumSet.range(DspChannel.OUT_1, DspChannel.OUT_8);
+    }
+
+    private static Set<DspChannel> channelKeys(JsonNode channels) {
+        EnumSet<DspChannel> result = EnumSet.noneOf(DspChannel.class);
+        if (channels == null || !channels.isObject()) {
+            return result;
+        }
+        channels.fieldNames().forEachRemaining(name -> addChannel(result, name));
+        return result;
+    }
+
+    private static void addChannel(Set<DspChannel> channels, String channelName) {
+        try {
+            channels.add(DspChannel.parse(channelName));
+        } catch (IllegalArgumentException ignored) {
+            // Metadata objects may also contain fields such as "status" or "rule".
+        }
+    }
+
     private static TestToneReadSpec parseTestToneReadSpec(JsonNode root) {
         JsonNode read = required(root, "parameters", "test_tone_generator", "read");
+        if (!readEvidenceAllowed(root, read)) {
+            return null;
+        }
         int blockIndex = parseHex(requiredText(read, "block_hex"));
 
         JsonNode fieldLocations = required(read, "field_locations");
@@ -150,27 +275,36 @@ public final class DspLibraryLoader {
 
     private static Map<Integer, List<DspFieldLocation>> parseGainReadLocations(JsonNode root) {
         JsonNode gainRead = required(root, "parameters", "gain", "read");
+        if (!readEvidenceAllowed(root, gainRead)) {
+            return Map.of();
+        }
 
         Map<Integer, List<DspFieldLocation>> byBlock = new HashMap<>();
-        mergeLocationMap(byBlock, parseChannelLocationMap(required(gainRead, "input_locations")));
-        mergeLocationMap(byBlock, parseChannelLocationMap(required(gainRead, "output_locations")));
+        mergeLocationMap(byBlock, parseChannelLocationMap(root, required(gainRead, "input_locations"), gainRead));
+        mergeLocationMap(byBlock, parseChannelLocationMap(root, required(gainRead, "output_locations"), gainRead));
         return byBlock;
     }
 
     private static Map<Integer, List<DspFieldLocation>> parsePhaseReadLocations(JsonNode root) {
         JsonNode phaseRead = required(root, "parameters", "phase", "read");
-        if (!phaseRead.has("input_locations") || !phaseRead.has("output_locations")) {
+        if (!readEvidenceAllowed(root, phaseRead)
+                || !phaseRead.has("input_locations")
+                || !phaseRead.has("output_locations")) {
             return Map.of();
         }
 
         Map<Integer, List<DspFieldLocation>> byBlock = new HashMap<>();
-        mergeLocationMap(byBlock, parseChannelLocationMap(required(phaseRead, "input_locations")));
-        mergeLocationMap(byBlock, parseChannelLocationMap(required(phaseRead, "output_locations")));
+        mergeLocationMap(byBlock, parseChannelLocationMap(root, required(phaseRead, "input_locations"), phaseRead));
+        mergeLocationMap(byBlock, parseChannelLocationMap(root, required(phaseRead, "output_locations"), phaseRead));
         return byBlock;
     }
 
     private static Map<Integer, List<DspFieldLocation>> parseDelayReadLocations(JsonNode root) {
-        JsonNode channels = required(root, "parameters", "delay", "read", "full_channel_read_map", "channels");
+        JsonNode read = required(root, "parameters", "delay", "read");
+        if (!readEvidenceAllowed(root, read)) {
+            return Map.of();
+        }
+        JsonNode channels = required(read, "full_channel_read_map", "channels");
         if (!channels.isObject()) {
             throw new DspLibraryException("Expected object for delay read map channels");
         }
@@ -179,6 +313,9 @@ public final class DspLibraryLoader {
         channels.fields().forEachRemaining(entry -> {
             DspChannel channel = DspChannel.parse(entry.getKey());
             JsonNode node = entry.getValue();
+            if (!readEvidenceAllowed(root, node, read)) {
+                return;
+            }
 
             int blockIndex = parseHex(requiredText(node, "block_hex"));
             int dataOffset = parseBlockDumpDataOffset(node);
@@ -190,7 +327,11 @@ public final class DspLibraryLoader {
         return byBlock;
     }
 
-    private static Map<Integer, List<DspFieldLocation>> parseChannelLocationMap(JsonNode arrayNode) {
+    private static Map<Integer, List<DspFieldLocation>> parseChannelLocationMap(
+            JsonNode root,
+            JsonNode arrayNode,
+            JsonNode fallbackEvidence
+    ) {
         List<DspFieldLocation> all = new ArrayList<>();
 
         if (!arrayNode.isArray()) {
@@ -198,6 +339,9 @@ public final class DspLibraryLoader {
         }
 
         for (JsonNode node : arrayNode) {
+            if (!readEvidenceAllowed(root, node, fallbackEvidence)) {
+                continue;
+            }
             DspChannel channel = DspChannel.parse(requiredText(node, "channel"));
             int blockIndex = parseHex(requiredText(node, "block_hex"));
             int dataOffset = parseBlockDumpDataOffset(node);
@@ -221,6 +365,9 @@ public final class DspLibraryLoader {
 
     private static Map<DspChannel, MatrixRouteLocation> parseMatrixRouteLocations(JsonNode root) {
         JsonNode read = required(root, "parameters", "matrix_routing", "read");
+        if (!readEvidenceAllowed(root, read)) {
+            return Map.of();
+        }
         JsonNode mapNode = read.path("predicted_full_read_map");
         if (mapNode.isMissingNode() || mapNode.isNull()) {
             mapNode = required(read, "full_read_map");
@@ -236,6 +383,9 @@ public final class DspLibraryLoader {
         mapNode.fields().forEachRemaining(entry -> {
             DspChannel output = DspChannel.parse(entry.getKey());
             JsonNode node = entry.getValue();
+            if (!readEvidenceAllowed(root, node, read)) {
+                return;
+            }
 
             int blockIndex = parseHex(requiredText(node, "block_hex"));
             int dataOffset = parseBlockDumpDataOffset(node);
@@ -248,6 +398,9 @@ public final class DspLibraryLoader {
 
     private static Map<Integer, List<MatrixCrosspointLocation>> parseMatrixCrosspointLocations(JsonNode root) {
         JsonNode read = required(root, "parameters", "matrix_crosspoint_gain", "read");
+        if (!readEvidenceAllowed(root, read)) {
+            return Map.of();
+        }
         JsonNode outputs = read.path("predicted_full_read_map");
         if (outputs.isMissingNode() || outputs.isNull()) {
             outputs = required(read, "full_read_map");
@@ -270,6 +423,9 @@ public final class DspLibraryLoader {
             inputs.fields().forEachRemaining(inputEntry -> {
                 DspChannel input = DspChannel.parse(inputEntry.getKey());
                 JsonNode node = inputEntry.getValue();
+                if (!readEvidenceAllowed(root, node, read)) {
+                    return;
+                }
 
                 int blockIndex = parseHex(requiredText(node, "block_hex"));
                 int dataOffset = parseBlockDumpDataOffset(node);
@@ -286,6 +442,7 @@ public final class DspLibraryLoader {
         JsonNode muteRead = required(root, "parameters", "mute", "read");
         JsonNode inputs = required(muteRead, "inputs");
         JsonNode outputs = required(muteRead, "outputs");
+        String status = muteRead.path("status").asText("").trim().toLowerCase();
 
         int inputBlock = parseHex(requiredText(inputs, "block_hex"));
         int outputBlock = parseHex(requiredText(outputs, "block_hex"));
@@ -299,8 +456,9 @@ public final class DspLibraryLoader {
 
         int inputDataOffset = parseBlockDumpDataOffset(inputs);
         int outputDataOffset = parseBlockDumpDataOffset(outputs);
+        boolean confirmedFromDevice = evidenceStatusConfirmed(status);
 
-        return new MuteReadSpec(inputBlock, inputDataOffset, outputDataOffset);
+        return new MuteReadSpec(inputBlock, inputDataOffset, outputDataOffset, confirmedFromDevice);
     }
 
     private static Map<Integer, List<OutputPeqBandLocation>> parseOutputPeqLocations(
@@ -313,10 +471,14 @@ public final class DspLibraryLoader {
                 .path("full_output_read_map")
                 .path("outputs");
         if (explicitOutputs.isObject()) {
-            return parseExplicitOutputPeqLocations(explicitOutputs);
+            return parseExplicitOutputPeqLocations(root, explicitOutputs);
         }
 
-        JsonNode peq1 = required(root, "parameters", "peq_output", "read", "output_observations", "Out1", "PEQ1");
+        JsonNode read = required(root, "parameters", "peq_output", "read");
+        if (!readEvidenceAllowed(root, read)) {
+            return Map.of();
+        }
+        JsonNode peq1 = required(read, "output_observations", "Out1", "PEQ1");
 
         int gainOffset = parseBlockDumpDataOffset(required(peq1, "gain"));
         int frequencyOffset = parseBlockDumpDataOffset(required(peq1, "frequency"));
@@ -346,7 +508,10 @@ public final class DspLibraryLoader {
                         bandIndex,
                         advanceOutputPeqField(startBlockIndex, bandBaseOffset),
                         advanceOutputPeqField(startBlockIndex, bandBaseOffset + 2),
-                        advanceOutputPeqField(startBlockIndex, bandBaseOffset + 4)
+                        advanceOutputPeqField(startBlockIndex, bandBaseOffset + 4),
+                        advanceOutputPeqField(startBlockIndex, bandBaseOffset + 5),
+                        null,
+                        bandIndex <= 8 ? bandIndex - 1 : 0
                 );
                 addOutputPeqLocation(byBlock, location);
             }
@@ -355,12 +520,28 @@ public final class DspLibraryLoader {
         return byBlock;
     }
 
-    private static Map<Integer, List<OutputPeqBandLocation>> parseExplicitOutputPeqLocations(JsonNode outputs) {
+    private static Map<Integer, List<OutputPeqBandLocation>> parseExplicitOutputPeqLocations(
+            JsonNode root,
+            JsonNode outputs
+    ) {
         Map<Integer, List<OutputPeqBandLocation>> byBlock = new HashMap<>();
 
         outputs.fields().forEachRemaining(outputEntry -> {
             DspChannel channel = DspChannel.parse(outputEntry.getKey());
-            JsonNode starts = required(outputEntry.getValue(), "value_record_starts");
+            JsonNode outputNode = outputEntry.getValue();
+            if (!readEvidenceAllowed(root, outputNode)) {
+                return;
+            }
+            JsonNode starts = required(outputNode, "value_record_starts");
+            JsonNode bypass = required(outputNode, "bypass_bitmask");
+            PeqFieldLocation lowBypassMask = parsePayloadFieldReference(
+                    requiredText(bypass, "low_byte_peq1_to_peq8"),
+                    0
+            );
+            PeqFieldLocation highBypassMask = parsePayloadFieldReference(
+                    requiredText(bypass, "high_byte_peq9"),
+                    0
+            );
 
             for (int bandIndex = 1; bandIndex <= 9; bandIndex++) {
                 String reference = requiredText(starts, "PEQ" + bandIndex);
@@ -369,7 +550,10 @@ public final class DspLibraryLoader {
                         bandIndex,
                         parsePayloadFieldReference(reference, 0),
                         parsePayloadFieldReference(reference, 2),
-                        parsePayloadFieldReference(reference, 4)
+                        parsePayloadFieldReference(reference, 4),
+                        parsePayloadFieldReference(reference, 5),
+                        bandIndex <= 8 ? lowBypassMask : highBypassMask,
+                        bandIndex <= 8 ? bandIndex - 1 : 0
                 );
                 addOutputPeqLocation(byBlock, location);
             }
@@ -383,6 +567,10 @@ public final class DspLibraryLoader {
         addOutputPeqLocation(byBlock, location.gain().blockIndex(), location);
         addOutputPeqLocation(byBlock, location.frequency().blockIndex(), location);
         addOutputPeqLocation(byBlock, location.q().blockIndex(), location);
+        addOutputPeqLocation(byBlock, location.filterType().blockIndex(), location);
+        if (location.bypassMask() != null) {
+            addOutputPeqLocation(byBlock, location.bypassMask().blockIndex(), location);
+        }
     }
 
     private static void addOutputPeqLocation(Map<Integer, List<OutputPeqBandLocation>> byBlock,
@@ -445,19 +633,31 @@ public final class DspLibraryLoader {
             Map<DspChannel, MatrixRouteLocation> matrixRouteLocations
     ) {
         JsonNode read = required(root, "parameters", "crossover", "read");
+        if (!readEvidenceAllowed(root, read) && !requiresStrictEvidence(root)) {
+            return Map.of();
+        }
 
         Map<Integer, List<CrossoverChannelLocation>> byBlock = new HashMap<>();
         JsonNode inputObservations = required(read, "input_observations");
-        addObservedInputCrossoverLocation(byBlock, DspChannel.IN_A, required(inputObservations, "InA"));
+        JsonNode inA = required(inputObservations, "InA");
+        if (crossoverNodeConfirmed(root, inA)) {
+            addObservedInputCrossoverLocation(byBlock, DspChannel.IN_A, inA);
+        }
 
         JsonNode predictedInputs = required(read, "predicted_input_read_maps");
-        addPredictedInputCrossoverLocation(byBlock, DspChannel.IN_B, required(predictedInputs, "InB"));
-        addPredictedInputCrossoverLocation(byBlock, DspChannel.IN_C, required(predictedInputs, "InC"));
-        addPredictedInputCrossoverLocation(byBlock, DspChannel.IN_D, required(predictedInputs, "InD"));
+        addPredictedInputCrossoverLocationIfConfirmed(
+                root, byBlock, DspChannel.IN_B, required(predictedInputs, "InB")
+        );
+        addPredictedInputCrossoverLocationIfConfirmed(
+                root, byBlock, DspChannel.IN_C, required(predictedInputs, "InC")
+        );
+        addPredictedInputCrossoverLocationIfConfirmed(
+                root, byBlock, DspChannel.IN_D, required(predictedInputs, "InD")
+        );
 
         JsonNode fullOutputReadMap = read.path("full_output_read_map").path("outputs");
         if (fullOutputReadMap.isObject()) {
-            addExplicitOutputCrossoverLocations(byBlock, fullOutputReadMap);
+            addExplicitOutputCrossoverLocations(root, byBlock, fullOutputReadMap);
         } else {
             for (DspChannel channel : DspChannel.values()) {
                 if (channel.index() < 4) {
@@ -485,11 +685,17 @@ public final class DspLibraryLoader {
         return byBlock;
     }
 
-    private static void addExplicitOutputCrossoverLocations(Map<Integer, List<CrossoverChannelLocation>> byBlock,
-                                                            JsonNode outputs) {
+    private static void addExplicitOutputCrossoverLocations(
+            JsonNode root,
+            Map<Integer, List<CrossoverChannelLocation>> byBlock,
+            JsonNode outputs
+    ) {
         outputs.fields().forEachRemaining(entry -> {
             DspChannel channel = DspChannel.parse(entry.getKey());
             JsonNode node = entry.getValue();
+            if (!readEvidenceAllowed(root, node)) {
+                return;
+            }
 
             PeqFieldLocation highPassMode = parseInputPeqFieldLocation(
                     node.has("high_pass_mode")
@@ -545,6 +751,17 @@ public final class DspLibraryLoader {
         addCrossoverLocation(byBlock, location);
     }
 
+    private static void addPredictedInputCrossoverLocationIfConfirmed(
+            JsonNode root,
+            Map<Integer, List<CrossoverChannelLocation>> byBlock,
+            DspChannel channel,
+            JsonNode node
+    ) {
+        if (crossoverNodeConfirmed(root, node)) {
+            addPredictedInputCrossoverLocation(byBlock, channel, node);
+        }
+    }
+
     private static void addCrossoverLocation(Map<Integer, List<CrossoverChannelLocation>> byBlock,
                                              CrossoverChannelLocation location) {
         addCrossoverLocation(byBlock, location.highPassFrequency(), location);
@@ -588,13 +805,33 @@ public final class DspLibraryLoader {
 
     private static Map<Integer, List<InputPeqBandLocation>> parseInputPeqLocations(JsonNode root) {
         JsonNode read = required(root, "parameters", "peq_input", "read");
+        if (!readEvidenceAllowed(root, read) && !requiresStrictEvidence(root)) {
+            return Map.of();
+        }
 
         Map<Integer, List<InputPeqBandLocation>> byBlock = new HashMap<>();
         if (read.has("ina_full_read_map_observed")) {
-            parseInputPeqBandMap(byBlock, DspChannel.IN_A, required(read, "ina_full_read_map_observed"));
-            parseInputPeqBandMap(byBlock, DspChannel.IN_B, required(read, "inb_full_read_map_predicted_from_observed_ina_ind_stride"));
-            parseInputPeqBandMap(byBlock, DspChannel.IN_C, required(read, "inc_full_read_map_predicted_from_observed_ina_ind_stride"));
-            parseInputPeqBandMap(byBlock, DspChannel.IN_D, required(read, "ind_full_read_map_observed"));
+            JsonNode observations = required(read, "input_observations");
+            if (readEvidenceAllowed(root, required(observations, "InA"))) {
+                parseInputPeqBandMap(byBlock, DspChannel.IN_A, required(read, "ina_full_read_map_observed"));
+            }
+            if (observations.has("InB") && readEvidenceAllowed(root, observations.get("InB"))) {
+                parseInputPeqBandMap(
+                        byBlock,
+                        DspChannel.IN_B,
+                        required(read, "inb_full_read_map_predicted_from_observed_ina_ind_stride")
+                );
+            }
+            if (observations.has("InC") && readEvidenceAllowed(root, observations.get("InC"))) {
+                parseInputPeqBandMap(
+                        byBlock,
+                        DspChannel.IN_C,
+                        required(read, "inc_full_read_map_predicted_from_observed_ina_ind_stride")
+                );
+            }
+            if (readEvidenceAllowed(root, required(observations, "InD"))) {
+                parseInputPeqBandMap(byBlock, DspChannel.IN_D, required(read, "ind_full_read_map_observed"));
+            }
         } else {
             JsonNode predictedMaps = required(read, "predicted_input_read_maps");
             parseInputPeqBandMap(byBlock, DspChannel.IN_A, required(read, "ina_full_read_prediction"));
@@ -607,7 +844,11 @@ public final class DspLibraryLoader {
     }
 
     private static Map<Integer, List<InputGateLocation>> parseInputGateLocations(JsonNode root) {
-        JsonNode inputs = required(root, "parameters", "gate", "read", "full_input_read_map", "inputs");
+        JsonNode read = required(root, "parameters", "gate", "read");
+        if (!readEvidenceAllowed(root, read)) {
+            return Map.of();
+        }
+        JsonNode inputs = required(read, "full_input_read_map", "inputs");
         if (!inputs.isObject()) {
             throw new DspLibraryException("Expected object for gate input read map");
         }
@@ -616,6 +857,9 @@ public final class DspLibraryLoader {
         inputs.fields().forEachRemaining(entry -> {
             DspChannel channel = DspChannel.parse(entry.getKey());
             JsonNode node = entry.getValue();
+            if (!readEvidenceAllowed(root, node, read)) {
+                return;
+            }
 
             InputGateLocation location = new InputGateLocation(
                     channel,
@@ -631,6 +875,10 @@ public final class DspLibraryLoader {
     }
 
     private static Map<Integer, List<InputGeqBandLocation>> parseInputGeqLocations(JsonNode root) {
+        JsonNode read = required(root, "parameters", "geq_input", "read");
+        if (!readEvidenceAllowed(root, read)) {
+            return Map.of();
+        }
         Map<Integer, List<InputGeqBandLocation>> byBlock = new HashMap<>();
 
         for (DspChannel channel : List.of(DspChannel.IN_A, DspChannel.IN_B, DspChannel.IN_C, DspChannel.IN_D)) {
@@ -758,6 +1006,9 @@ public final class DspLibraryLoader {
             observedInputs.fields().forEachRemaining(entry -> {
                 DspChannel channel = DspChannel.parse(entry.getKey());
                 JsonNode node = entry.getValue();
+                if (!readEvidenceAllowed(root, node)) {
+                    return;
+                }
                 int blockIndex = parseHex(requiredText(node, "block_hex"));
                 int dataOffset = parseBlockDumpDataOffset(node);
 
@@ -791,6 +1042,9 @@ public final class DspLibraryLoader {
 
         Map<Integer, OutputPeqBandDefaults> defaults = new HashMap<>();
         for (JsonNode node : baseline) {
+            if (!readEvidenceAllowed(root, node)) {
+                continue;
+            }
             int bandIndex = required(node, "band").asInt();
             double frequencyHz = parseFrequencyText(requiredText(node, "frequency_gui"));
             double q = Double.parseDouble(requiredText(node, "q_gui"));
@@ -802,28 +1056,38 @@ public final class DspLibraryLoader {
     }
 
     private static Map<Integer, List<CompressorChannelLocation>> parseCompressorLocations(JsonNode root) {
-        JsonNode compressor = root.path("parameters").path("compressor");
+        JsonNode compressor = root.path("parameters").path("input_compressor");
         if (compressor.isMissingNode() || compressor.isNull()) {
             return Map.of();
         }
 
-        JsonNode outputs = required(compressor, "read", "full_output_read_map", "outputs");
-        if (!outputs.isObject()) {
-            throw new DspLibraryException("Expected object for compressor output read map");
+        JsonNode read = required(compressor, "read");
+        if (!readEvidenceAllowed(root, read)) {
+            return Map.of();
+        }
+        JsonNode inputs = required(read, "input_locations");
+        if (!inputs.isObject()) {
+            throw new DspLibraryException("Expected object for input compressor read map");
         }
 
         Map<Integer, List<CompressorChannelLocation>> byBlock = new HashMap<>();
-        outputs.fields().forEachRemaining(entry -> {
+        inputs.fields().forEachRemaining(entry -> {
             DspChannel channel = DspChannel.parse(entry.getKey());
             JsonNode node = entry.getValue();
+            if (!readEvidenceAllowed(root, node, read)) {
+                return;
+            }
 
             CompressorChannelLocation location = new CompressorChannelLocation(
                     channel,
-                    parseInputPeqFieldLocation(required(node, "ratio")),
-                    parseInputPeqFieldLocation(required(node, "attack")),
-                    parseInputPeqFieldLocation(required(node, "release")),
-                    parseInputPeqFieldLocation(required(node, "knee")),
-                    parseInputPeqFieldLocation(required(node, "threshold"))
+                    parseChildFieldLocation(node, "ratio"),
+                    parseChildFieldLocation(node, "attack"),
+                    parseChildFieldLocation(node, "release"),
+                    parseChildFieldLocation(node, "knee"),
+                    parseChildFieldLocation(node, "threshold"),
+                    parseChildFieldLocation(node, "frequency"),
+                    parseChildFieldLocation(node, "type_context"),
+                    parseChildFieldLocation(node, "type")
             );
             addCompressorLocation(byBlock, location);
         });
@@ -838,6 +1102,9 @@ public final class DspLibraryLoader {
         addCompressorLocation(byBlock, location.release(), location);
         addCompressorLocation(byBlock, location.knee(), location);
         addCompressorLocation(byBlock, location.threshold(), location);
+        addCompressorLocation(byBlock, location.frequency(), location);
+        addCompressorLocation(byBlock, location.typeContext(), location);
+        addCompressorLocation(byBlock, location.type(), location);
     }
 
     private static void addCompressorLocation(Map<Integer, List<CompressorChannelLocation>> byBlock,
@@ -851,6 +1118,9 @@ public final class DspLibraryLoader {
 
     private static Map<Integer, List<LimiterChannelLocation>> parseLimiterLocations(JsonNode root) {
         JsonNode read = required(root, "parameters", "limiter", "read");
+        if (!readEvidenceAllowed(root, read)) {
+            return Map.of();
+        }
         JsonNode outputs = read.path("full_output_read_map").path("outputs");
         if (!outputs.isObject()) {
             outputs = required(read, "output_locations");
@@ -863,6 +1133,9 @@ public final class DspLibraryLoader {
         outputs.fields().forEachRemaining(entry -> {
             DspChannel channel = DspChannel.parse(entry.getKey());
             JsonNode node = entry.getValue();
+            if (!readEvidenceAllowed(root, node, read)) {
+                return;
+            }
 
             LimiterChannelLocation location = new LimiterChannelLocation(
                     channel,
@@ -892,7 +1165,7 @@ public final class DspLibraryLoader {
                                            LimiterChannelLocation location) {
         addLimiterLocation(byBlock, location.attack(), location);
         addLimiterLocation(byBlock, location.release(), location);
-        addLimiterLocation(byBlock, location.unknown(), location);
+        addLimiterLocation(byBlock, location.knee(), location);
         addLimiterLocation(byBlock, location.threshold(), location);
     }
 
@@ -914,6 +1187,22 @@ public final class DspLibraryLoader {
         Map<Integer, String> byRaw = new HashMap<>();
         for (int i = 0; i < ratios.size(); i++) {
             byRaw.put(i, ratios.get(i).asText());
+        }
+        return byRaw;
+    }
+
+    private static Map<Integer, String> parseInputCompressorTypes(JsonNode root) {
+        JsonNode types = root.path("enums").path("input_compressor_types");
+        if (types.isMissingNode() || types.isNull()) {
+            return Map.of();
+        }
+        if (!types.isArray()) {
+            throw new DspLibraryException("Expected array for input compressor types");
+        }
+
+        Map<Integer, String> byRaw = new HashMap<>();
+        for (int i = 0; i < types.size(); i++) {
+            byRaw.put(i, types.get(i).asText());
         }
         return byRaw;
     }
@@ -943,7 +1232,25 @@ public final class DspLibraryLoader {
         int statusByteOffset = findTailByteOffset(tailBytes, "status_byte_40", 40);
         int limiterMaskOffset = findTailByteOffset(tailBytes, "output_limiter_mask", 41);
 
-        return new MeterLayout(slots, responseLengthBytes, statusByteOffset, limiterMaskOffset);
+        JsonNode slotMapping = read.path("slot_mapping");
+        JsonNode levelCalibration = read.path("value_encoding").path("physical_level_calibration");
+        JsonNode limiterMapping = read.path("limiter_indicator_runtime");
+        boolean channelMappingConfirmed = !slotMapping.isMissingNode()
+                && readEvidenceAllowed(root, slotMapping);
+        boolean levelCalibrationConfirmed = !levelCalibration.isMissingNode()
+                && readEvidenceAllowed(root, levelCalibration);
+        boolean limiterMappingConfirmed = !limiterMapping.isMissingNode()
+                && readEvidenceAllowed(root, limiterMapping);
+
+        return new MeterLayout(
+                slots,
+                responseLengthBytes,
+                statusByteOffset,
+                limiterMaskOffset,
+                channelMappingConfirmed,
+                levelCalibrationConfirmed,
+                limiterMappingConfirmed
+        );
     }
 
     private static int findTailByteOffset(JsonNode tailBytes, String name, int fallback) {
@@ -983,12 +1290,11 @@ public final class DspLibraryLoader {
     }
 
     private static PeqFilterType parsePeqFilterType(String value) {
-        return switch (value.trim().toLowerCase()) {
-            case "peak" -> PeqFilterType.PEAK;
-            case "low shelf" -> PeqFilterType.LOW_SHELF;
-            case "high shelf" -> PeqFilterType.HIGH_SHELF;
-            default -> throw new DspLibraryException("Unknown PEQ filter type: " + value);
-        };
+        try {
+            return PeqFilterType.parse(value);
+        } catch (IllegalArgumentException e) {
+            throw new DspLibraryException("Unknown PEQ filter type: " + value, e);
+        }
     }
 
     private static double parseFrequencyText(String value) {
@@ -1046,6 +1352,80 @@ public final class DspLibraryLoader {
             );
         }
         return dataOffset;
+    }
+
+    private static boolean crossoverNodeConfirmed(JsonNode root, JsonNode node) {
+        if (!requiresStrictEvidence(root)) {
+            return true;
+        }
+        if (node.has("status")) {
+            return readEvidenceAllowed(root, node);
+        }
+        for (String field : List.of(
+                "high_pass_frequency",
+                "high_pass_slope_or_mode",
+                "high_pass_mode",
+                "high_pass_bypass",
+                "low_pass_frequency",
+                "low_pass_mode",
+                "low_pass_bypass"
+        )) {
+            if (node.has(field) && !readEvidenceAllowed(root, node.get(field))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean readEvidenceAllowed(JsonNode root, JsonNode node, JsonNode... fallbacks) {
+        if (!requiresStrictEvidence(root)) {
+            return true;
+        }
+        JsonNode statusNode = node == null ? null : node.get("status");
+        if (statusNode != null && statusNode.isTextual()) {
+            return evidenceStatusConfirmed(statusNode.asText());
+        }
+        for (JsonNode fallback : fallbacks) {
+            JsonNode fallbackStatus = fallback == null ? null : fallback.get("status");
+            if (fallbackStatus != null && fallbackStatus.isTextual()) {
+                return evidenceStatusConfirmed(fallbackStatus.asText());
+            }
+        }
+        return false;
+    }
+
+    private static boolean requiresStrictEvidence(JsonNode root) {
+        return root.path("library_type")
+                .asText("")
+                .toLowerCase()
+                .contains("fir");
+    }
+
+    static boolean evidenceStatusConfirmed(String status) {
+        if (status == null || status.isBlank()) {
+            return false;
+        }
+        String normalized = status.trim().toLowerCase();
+        for (String rejected : List.of(
+                "predicted",
+                "inferred",
+                "derived",
+                "hypothesis",
+                "absent",
+                "unsupported",
+                "unknown",
+                "not_",
+                "stale",
+                "partial",
+                "mixed"
+        )) {
+            if (normalized.contains(rejected)) {
+                return false;
+            }
+        }
+        return normalized.contains("observed")
+                || normalized.contains("confirmed")
+                || normalized.contains("verified");
     }
 
     private static int parseMaxParameterBlockIndex(JsonNode root) {

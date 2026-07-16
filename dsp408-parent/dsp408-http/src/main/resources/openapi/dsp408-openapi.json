@@ -16,7 +16,9 @@
     {"name": "dsps"},
     {"name": "connection"},
     {"name": "device"},
+    {"name": "preset"},
     {"name": "channels"},
+    {"name": "meters"},
     {"name": "peq"},
     {"name": "geq"},
     {"name": "gate"},
@@ -35,8 +37,12 @@
     "/api/v1/openapi.json": {"get": {"tags": ["meta"], "summary": "Get this OpenAPI document", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/dsps": {"get": {"tags": ["dsps"], "summary": "List configured DSP instances", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/dsps/{dspId}/state": {"get": {"tags": ["dsps"], "summary": "Get state for a specific DSP instance", "description": "Most single-DSP endpoints can be prefixed with /api/v1/dsps/{dspId}, for example /api/v1/dsps/main/channels/out1/gain.", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/dsps/{dspId}/meters": {"get": {"tags": ["dsps", "meters"], "summary": "Get cached runtime meters for a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/MeterStateResponse"}}}},
+    "/api/v1/dsps/{dspId}/meters/read": {"post": {"tags": ["dsps", "meters"], "summary": "Request and return runtime meters for a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/StateDtoResponse"}}}},
     "/api/v1/dsps/{dspId}/connection/connect": {"post": {"tags": ["dsps"], "summary": "Connect a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/dsps/{dspId}/channels/{channelId}/gain": {"post": {"tags": ["dsps"], "summary": "Set gain on a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}, {"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/dsps/{dspId}/preset/validate": {"post": {"tags": ["dsps", "preset"], "summary": "Validate a JSON preset for a specific DSP without changing hardware", "parameters": [{"$ref": "#/components/parameters/dspId"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetValidationResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/dsps/{dspId}/preset/apply": {"post": {"tags": ["dsps", "preset"], "summary": "Safely apply a JSON preset to a specific DSP", "description": "The document is fully validated before writes. All channels are muted first, and an emergency mute is attempted if an operation fails.", "parameters": [{"$ref": "#/components/parameters/dspId"}, {"$ref": "#/components/parameters/unmuteSelected"}, {"$ref": "#/components/parameters/refreshPreset"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetApplyResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "500": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/state": {"get": {"tags": ["device"], "summary": "Get known DSP state", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/status": {"get": {"tags": ["device"], "summary": "Alias for state", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/device": {"get": {"tags": ["device"], "summary": "Get device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
@@ -49,6 +55,7 @@
     "/api/v1/command": {"post": {"tags": ["debug"], "summary": "Execute shell or matrix command", "description": "Body: line, optional mode=shell|matrix, optional admin=true|false.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels": {"get": {"tags": ["channels"], "summary": "List channels", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels/{channelId}": {"get": {"tags": ["channels"], "summary": "Get channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/channels/{channelId}/meter": {"get": {"tags": ["channels", "meters"], "summary": "Get cached runtime meter for one channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/MeterResponse"}}}},
     "/api/v1/channels/{channelId}/name": {"post": {"tags": ["channels"], "summary": "Set channel name", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/channels/{channelId}/gain": {"post": {"tags": ["channels"], "summary": "Set gain", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels/{channelId}/mute": {"post": {"tags": ["channels"], "summary": "Mute channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
@@ -58,6 +65,8 @@
     "/api/v1/delay-unit": {"post": {"tags": ["channels"], "summary": "Set delay unit", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/preset/load": {"post": {"tags": ["device"], "summary": "Load preset by slot or index", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/preset/name/read": {"post": {"tags": ["device"], "summary": "Request preset name", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
+    "/api/v1/preset/validate": {"post": {"tags": ["preset"], "summary": "Validate a complete JSON preset without changing the DSP", "description": "Accepts the preset document directly, so files can be posted with curl --data-binary @preset.json.", "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetValidationResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/preset/apply": {"post": {"tags": ["preset"], "summary": "Safely apply a complete JSON preset", "description": "The document is fully validated before writes. All channels are muted first. unmuteAfterApply is only honored when unmuteSelected=true.", "parameters": [{"$ref": "#/components/parameters/unmuteSelected"}, {"$ref": "#/components/parameters/refreshPreset"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetApplyResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "500": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}": {"post": {"tags": ["peq"], "summary": "Set full output PEQ band", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}/frequency": {"post": {"tags": ["peq"], "summary": "Set output PEQ frequency", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}/q": {"post": {"tags": ["peq"], "summary": "Set output PEQ Q", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
@@ -65,24 +74,34 @@
     "/api/v1/channels/{channelId}/peq/{peqIndex}/gain": {"post": {"tags": ["peq"], "summary": "Set output PEQ gain", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}/gain/code": {"post": {"tags": ["peq"], "summary": "Set output PEQ raw gain code", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}/type": {"post": {"tags": ["peq"], "summary": "Set output PEQ type", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/channels/{channelId}/input-peq/{peqIndex}": {"post": {"tags": ["peq"], "summary": "Set full input PEQ band", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/channels/{channelId}/input-peq/{peqIndex}/{field}": {"post": {"tags": ["peq"], "summary": "Set input PEQ field: frequency, q, gain, type, bypass", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/channels/{channelId}/geq/{bandIndex}/gain": {"post": {"tags": ["geq"], "summary": "Set input GEQ band gain", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "bandIndex", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 31}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/channels/{channelId}/gate": {"post": {"tags": ["gate"], "summary": "Set full input gate", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/channels/{channelId}/gate/{field}": {"post": {"tags": ["gate"], "summary": "Set gate field: threshold, hold, attack, release", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/channels/{channelId}/crossover/{filter}": {"post": {"tags": ["crossover"], "summary": "Set crossover filter hp or lp", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "filter", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/channels/{channelId}/crossover/{filter}/{field}": {"post": {"tags": ["crossover"], "summary": "Set crossover field: frequency, slope, bypass", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "filter", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/matrix/route": {"post": {"tags": ["matrix"], "summary": "Set output route", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
+    "/api/v1/channels/{channelId}/input-peq/{peqIndex}": {"post": {"tags": ["peq"], "summary": "Set full input PEQ band", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/channels/{channelId}/input-peq/{peqIndex}/{field}": {"post": {"tags": ["peq"], "summary": "Set input PEQ field: frequency, q, gain, type, bypass", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/channels/{channelId}/geq/{bandIndex}/gain": {"post": {"tags": ["geq"], "summary": "Set input GEQ band gain", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "bandIndex", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 31}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/channels/{channelId}/gate": {
+      "get": {"tags": ["gate"], "summary": "Get cached input gate state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}},
+      "post": {"tags": ["gate"], "summary": "Set full input gate", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}
+    },
+    "/api/v1/channels/{channelId}/gate/{field}": {"post": {"tags": ["gate"], "summary": "Set gate field: threshold, hold, attack, release", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/channels/{channelId}/crossover/{filter}": {"post": {"tags": ["crossover"], "summary": "Set crossover filter hp or lp", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "filter", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/channels/{channelId}/crossover/{filter}/{field}": {"post": {"tags": ["crossover"], "summary": "Set crossover field: frequency, slope, bypass", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "filter", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/matrix/route": {"post": {"tags": ["matrix"], "summary": "Set complete output route mask", "description": "Body: output plus either input for one source or inputs as an array of zero to four sources.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/matrix/crosspoint-gain": {"post": {"tags": ["matrix"], "summary": "Set matrix crosspoint gain", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/fir/mode": {"post": {"tags": ["fir"], "summary": "FIR408 only: set output processing mode iir or fir", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/fir/generator": {"post": {"tags": ["fir"], "summary": "FIR408 only: set generated FIR filter", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/fir/upload": {"post": {"tags": ["fir"], "summary": "FIR408 only: upload external FIR coefficients", "description": "Body: channel, name, coefficients array or whitespace/comma-separated string.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxListResponse"}}}},
-    "/api/v1/channels/{channelId}/compressor": {"post": {"tags": ["dynamics"], "summary": "Set output compressor", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/channels/{channelId}/limiter": {"post": {"tags": ["dynamics"], "summary": "Set output limiter", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
+    "/api/v1/fir/mode": {"post": {"tags": ["fir"], "summary": "FIR408 only: set output processing mode iir or fir", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/fir/generator": {"post": {"tags": ["fir"], "summary": "FIR408 only: set generated FIR filter", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/fir/upload": {"post": {"tags": ["fir"], "summary": "FIR408 only: upload external FIR coefficients", "description": "Body: channel, name, coefficients array or whitespace/comma-separated string.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxListResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/channels/{channelId}/compressor": {
+      "get": {"tags": ["dynamics"], "summary": "Get cached FIR408 input compressor state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}},
+      "post": {"tags": ["dynamics"], "summary": "Set FIR408 input compressor", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}
+    },
+    "/api/v1/channels/{channelId}/limiter": {
+      "get": {"tags": ["dynamics"], "summary": "Get cached output limiter state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}},
+      "post": {"tags": ["dynamics"], "summary": "Set output limiter", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}
+    },
     "/api/v1/test-tone/source": {"post": {"tags": ["test-tone"], "summary": "Set test tone source", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/test-tone/sine": {"post": {"tags": ["test-tone"], "summary": "Set test tone sine frequency by hz or raw selector", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/test-tone/off": {"post": {"tags": ["test-tone"], "summary": "Disable test tone", "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
-    "/api/v1/meters/read": {"post": {"tags": ["device"], "summary": "Request runtime meters", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/meters": {"get": {"tags": ["meters"], "summary": "Get cached runtime meters", "responses": {"200": {"$ref": "#/components/responses/MeterStateResponse"}}}},
+    "/api/v1/meters/read": {"post": {"tags": ["meters"], "summary": "Request runtime meters and return the updated DSP state", "responses": {"200": {"$ref": "#/components/responses/StateDtoResponse"}}}},
     "/api/v1/blocks": {"get": {"tags": ["blocks"], "summary": "List cached block indices", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/blocks/{blockIndex}": {"get": {"tags": ["blocks"], "summary": "Get cached block", "parameters": [{"$ref": "#/components/parameters/blockIndex"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/blocks/{blockIndex}/read": {"post": {"tags": ["blocks"], "summary": "Read one block", "parameters": [{"$ref": "#/components/parameters/blockIndex"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
@@ -106,7 +125,9 @@
       "dspId": {"name": "dspId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]*$"}, "description": "Configured DSP id, for example main, fir1 or room2"},
       "channelId": {"name": "channelId", "in": "path", "required": true, "schema": {"type": "string"}, "description": "ina, inb, inc, ind, out1..out8 or accepted core aliases"},
       "peqIndex": {"name": "peqIndex", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 9}},
-      "blockIndex": {"name": "blockIndex", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^(0x)?[0-9A-Fa-f]{1,2}$"}}
+      "blockIndex": {"name": "blockIndex", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^(0x)?[0-9A-Fa-f]{1,2}$"}},
+      "unmuteSelected": {"name": "unmuteSelected", "in": "query", "required": false, "schema": {"type": "boolean", "default": false}, "description": "Only when true are channels marked unmuteAfterApply=true unmuted after a fully successful apply."},
+      "refreshPreset": {"name": "refresh", "in": "query", "required": false, "schema": {"type": "boolean", "default": true}, "description": "Scan parameter blocks after writes and before optional unmute."}
     },
     "requestBodies": {
       "ObjectBody": {
@@ -114,6 +135,14 @@
         "content": {
           "application/json": {
             "schema": {"$ref": "#/components/schemas/Object"}
+          }
+        }
+      },
+      "JsonPresetBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/JsonPreset"}
           }
         }
       }
@@ -124,6 +153,30 @@
         "content": {
           "application/json": {
             "schema": {"$ref": "#/components/schemas/Object"}
+          }
+        }
+      },
+      "StateDtoResponse": {
+        "description": "DSP state including runtime meters",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/StateDto"}
+          }
+        }
+      },
+      "MeterStateResponse": {
+        "description": "Cached runtime meter state",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/MeterStateEnvelope"}
+          }
+        }
+      },
+      "MeterResponse": {
+        "description": "Cached runtime meter for one channel",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/MeterEnvelope"}
           }
         }
       },
@@ -142,12 +195,273 @@
             "schema": {"type": "array", "items": {"$ref": "#/components/schemas/RawTxDto"}}
           }
         }
+      },
+      "JsonPresetValidationResponse": {
+        "description": "JSON preset is valid; no DSP state was changed",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/JsonPresetValidationResult"}
+          }
+        }
+      },
+      "JsonPresetApplyResponse": {
+        "description": "JSON preset was safely applied",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/JsonPresetApplyResult"}
+          }
+        }
       }
     },
     "schemas": {
       "Object": {
         "type": "object",
         "additionalProperties": true
+      },
+      "JsonPreset": {
+        "type": "object",
+        "required": ["schemaVersion", "presetId", "inputs", "outputs"],
+        "properties": {
+          "schemaVersion": {"type": "string", "const": "1.0"},
+          "presetId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+          "title": {"type": "string"},
+          "description": {"type": "string"},
+          "delayUnit": {"type": "string", "enum": ["ms", "m", "ft"], "default": "ms"},
+          "inputs": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "#/components/schemas/JsonPresetInput"}},
+          "outputs": {"type": "array", "minItems": 8, "maxItems": 8, "items": {"$ref": "#/components/schemas/JsonPresetOutput"}},
+          "postApply": {"$ref": "#/components/schemas/Object"}
+        }
+      },
+      "JsonPresetInput": {
+        "type": "object",
+        "required": ["id", "name", "gainDb", "phaseInverted", "delayMs"],
+        "properties": {
+          "id": {"type": "string", "enum": ["ina", "inb", "inc", "ind"]},
+          "name": {"type": "string", "maxLength": 8, "pattern": "^[ -~]*$"},
+          "gainDb": {"type": "number", "minimum": -60, "maximum": 12},
+          "phaseInverted": {"type": "boolean"},
+          "delayMs": {"type": "number", "minimum": 0, "maximum": 680},
+          "unmuteAfterApply": {"type": "boolean", "default": false}
+        }
+      },
+      "JsonPresetOutput": {
+        "type": "object",
+        "required": ["id", "name", "gainDb", "phaseInverted", "delayMs", "processingMode"],
+        "properties": {
+          "id": {"type": "string", "enum": ["out1", "out2", "out3", "out4", "out5", "out6", "out7", "out8"]},
+          "name": {"type": "string", "maxLength": 8, "pattern": "^[ -~]*$"},
+          "gainDb": {"type": "number", "minimum": -60, "maximum": 12},
+          "phaseInverted": {"type": "boolean"},
+          "delayMs": {"type": "number", "minimum": 0, "maximum": 680},
+          "unmuteAfterApply": {"type": "boolean", "default": false},
+          "processingMode": {"type": "string", "enum": ["iir", "fir"]},
+          "route": {"$ref": "#/components/schemas/JsonPresetRoute"},
+          "routes": {"type": "array", "maxItems": 4, "uniqueItems": true, "items": {"$ref": "#/components/schemas/JsonPresetRoute"}},
+          "crossover": {"$ref": "#/components/schemas/JsonPresetCrossover"},
+          "limiter": {"$ref": "#/components/schemas/JsonPresetLimiter"}
+        }
+      },
+      "JsonPresetRoute": {
+        "type": "object",
+        "required": ["input", "crosspointGainDb"],
+        "properties": {
+          "input": {"type": "string", "enum": ["ina", "inb", "inc", "ind"]},
+          "crosspointGainDb": {"type": "number", "minimum": -60, "maximum": 0}
+        }
+      },
+      "JsonPresetCrossover": {
+        "type": "object",
+        "required": ["highPass", "lowPass"],
+        "properties": {
+          "highPass": {"$ref": "#/components/schemas/JsonPresetFilter"},
+          "lowPass": {"$ref": "#/components/schemas/JsonPresetFilter"}
+        }
+      },
+      "JsonPresetFilter": {
+        "type": "object",
+        "required": ["enabled", "hz", "slope"],
+        "properties": {
+          "enabled": {"type": "boolean"},
+          "hz": {"type": "number", "minimum": 19.7, "maximum": 20160},
+          "slope": {"type": "string", "examples": ["LR24"]}
+        }
+      },
+      "JsonPresetLimiter": {
+        "type": "object",
+        "required": ["enabled", "thresholdDb", "attackMs", "releaseMs"],
+        "properties": {
+          "enabled": {"type": "boolean"},
+          "thresholdDb": {"type": "number", "minimum": -90, "maximum": 20},
+          "attackMs": {"type": "number", "minimum": 1, "maximum": 999},
+          "releaseMs": {"type": "number", "minimum": 10, "maximum": 3000},
+          "status": {"type": "string"}
+        }
+      },
+      "JsonPresetValidationResult": {
+        "type": "object",
+        "required": ["ok", "valid", "dspId", "presetId", "inputChannels", "outputChannels", "selectedForUnmute", "warnings"],
+        "properties": {
+          "ok": {"type": "boolean", "const": true},
+          "valid": {"type": "boolean", "const": true},
+          "dspId": {"type": "string"},
+          "schemaVersion": {"type": "string"},
+          "presetId": {"type": "string"},
+          "title": {"type": "string"},
+          "inputChannels": {"type": "integer", "const": 4},
+          "outputChannels": {"type": "integer", "const": 8},
+          "selectedForUnmute": {"type": "array", "items": {"type": "string"}},
+          "warnings": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "JsonPresetApplyResult": {
+        "type": "object",
+        "required": ["ok", "applied", "dspId", "presetId", "operationsApplied", "refreshed", "unmutedChannels", "allChannelsRemainMuted", "warnings"],
+        "properties": {
+          "ok": {"type": "boolean", "const": true},
+          "applied": {"type": "boolean", "const": true},
+          "dspId": {"type": "string"},
+          "presetId": {"type": "string"},
+          "title": {"type": "string"},
+          "operationsApplied": {"type": "integer"},
+          "lastOperation": {"type": "string"},
+          "refreshed": {"type": "boolean"},
+          "unmuteSelectedRequested": {"type": "boolean"},
+          "unmutedChannels": {"type": "array", "items": {"type": "string"}},
+          "allChannelsRemainMuted": {"type": "boolean"},
+          "warnings": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "MeterDto": {
+        "type": "object",
+        "required": [
+          "id", "displayName", "index", "levelConfirmedFromDevice", "limiterConfirmedFromDevice",
+          "channelMappingConfirmed", "levelCalibrationConfirmed", "limiterMappingConfirmed"
+        ],
+        "properties": {
+          "id": {"type": "string", "examples": ["out1"]},
+          "displayName": {"type": "string", "examples": ["Out1"]},
+          "index": {"type": "integer", "minimum": 0, "maximum": 11},
+          "rawLowByte": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
+          "rawHighByte": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
+          "rawValue": {"type": ["integer", "null"], "minimum": 0, "maximum": 65535},
+          "levelDb": {
+            "type": ["number", "null"],
+            "description": "Empirical DSP408/FIR408 meter level. Calibrated with the FIR408 internal 1 kHz sine; values below the observed range are limited to -60 dB."
+          },
+          "aux": {"type": ["integer", "null"], "minimum": 0, "maximum": 255, "description": "Unknown third byte of the runtime meter slot."},
+          "limiterActive": {"type": ["boolean", "null"], "description": "Runtime limiter flag for Out1..Out8; null for input channels or before the first meter response."},
+          "levelConfirmedFromDevice": {"type": "boolean", "description": "A runtime meter payload was received from the physical DSP. This does not by itself prove the slot-to-channel mapping."},
+          "limiterConfirmedFromDevice": {"type": "boolean", "description": "The limiter mask was received from the physical DSP."},
+          "channelMappingConfirmed": {"type": "boolean", "description": "The slot-to-channel assignment has been independently verified for this library."},
+          "levelCalibrationConfirmed": {"type": "boolean", "description": "The raw-to-dB conversion has been calibrated on the physical FIR408."},
+          "limiterMappingConfirmed": {"type": "boolean", "description": "The limiter-mask bit mapping is verified for this library."},
+          "lastLevelUpdateSource": {"type": ["string", "null"]},
+          "lastLimiterUpdateSource": {"type": ["string", "null"]}
+        }
+      },
+      "MeterStateDto": {
+        "type": "object",
+        "required": ["channels", "statusConfirmedFromDevice"],
+        "properties": {
+          "channels": {"type": "array", "items": {"$ref": "#/components/schemas/MeterDto"}},
+          "statusByteRaw": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
+          "statusConfirmedFromDevice": {"type": "boolean"},
+          "lastStatusUpdateSource": {"type": ["string", "null"]}
+        }
+      },
+      "MeterStateEnvelope": {
+        "type": "object",
+        "required": ["dspId", "connected", "meters"],
+        "properties": {
+          "dspId": {"type": "string"},
+          "connected": {"type": "boolean"},
+          "meters": {"$ref": "#/components/schemas/MeterStateDto"}
+        }
+      },
+      "InputGateDto": {
+        "type": "object",
+        "required": [
+          "id", "displayName", "index",
+          "thresholdConfirmedFromDevice", "holdConfirmedFromDevice",
+          "attackConfirmedFromDevice", "releaseConfirmedFromDevice"
+        ],
+        "properties": {
+          "id": {"type": "string", "examples": ["ina"]},
+          "displayName": {"type": "string", "examples": ["InA"]},
+          "index": {"type": "integer", "minimum": 0, "maximum": 3},
+          "thresholdDb": {"type": ["number", "null"]},
+          "holdMs": {"type": ["number", "null"]},
+          "attackMs": {"type": ["number", "null"]},
+          "releaseMs": {"type": ["number", "null"]},
+          "thresholdConfirmedFromDevice": {"type": "boolean"},
+          "holdConfirmedFromDevice": {"type": "boolean"},
+          "attackConfirmedFromDevice": {"type": "boolean"},
+          "releaseConfirmedFromDevice": {"type": "boolean"},
+          "lastThresholdUpdateSource": {"type": ["string", "null"]},
+          "lastHoldUpdateSource": {"type": ["string", "null"]},
+          "lastAttackUpdateSource": {"type": ["string", "null"]},
+          "lastReleaseUpdateSource": {"type": ["string", "null"]}
+        }
+      },
+      "InputCompressorDto": {
+        "type": "object",
+        "required": ["id", "displayName", "index", "ratioConfirmedFromDevice", "typeConfirmedFromDevice"],
+        "properties": {
+          "id": {"type": "string", "examples": ["ina"]},
+          "displayName": {"type": "string", "examples": ["InA"]},
+          "index": {"type": "integer", "minimum": 0, "maximum": 3},
+          "ratioIndex": {"type": ["integer", "null"]},
+          "ratioLabel": {"type": ["string", "null"]},
+          "attackMs": {"type": ["number", "null"]},
+          "releaseMs": {"type": ["number", "null"]},
+          "kneeDb": {"type": ["number", "null"]},
+          "thresholdDb": {"type": ["number", "null"]},
+          "frequencyHz": {"type": ["number", "null"]},
+          "typeContextRaw": {"type": ["integer", "null"]},
+          "typeRaw": {"type": ["integer", "null"]},
+          "typeLabel": {"type": ["string", "null"]},
+          "ratioConfirmedFromDevice": {"type": "boolean"},
+          "typeConfirmedFromDevice": {"type": "boolean"}
+        }
+      },
+      "LimiterDto": {
+        "type": "object",
+        "required": ["id", "displayName", "index", "attackConfirmedFromDevice", "runtimeConfirmedFromDevice"],
+        "properties": {
+          "id": {"type": "string", "examples": ["out1"]},
+          "displayName": {"type": "string", "examples": ["Out1"]},
+          "index": {"type": "integer", "minimum": 4, "maximum": 11},
+          "attackMs": {"type": ["number", "null"]},
+          "releaseMs": {"type": ["number", "null"]},
+          "thresholdDb": {"type": ["number", "null"]},
+          "kneeDb": {"type": ["number", "null"]},
+          "runtimeActive": {"type": ["boolean", "null"]},
+          "attackConfirmedFromDevice": {"type": "boolean"},
+          "runtimeConfirmedFromDevice": {"type": "boolean"}
+        }
+      },
+      "MeterEnvelope": {
+        "type": "object",
+        "required": ["dspId", "connected", "meter"],
+        "properties": {
+          "dspId": {"type": "string"},
+          "connected": {"type": "boolean"},
+          "meter": {"$ref": "#/components/schemas/MeterDto"}
+        }
+      },
+      "StateDto": {
+        "type": "object",
+        "required": ["connected", "channels", "cachedBlockIndices", "inputGates", "inputCompressors", "limiters", "meters"],
+        "properties": {
+          "connected": {"type": "boolean"},
+          "deviceInfo": {"$ref": "#/components/schemas/Object"},
+          "channels": {"type": "array", "items": {"$ref": "#/components/schemas/Object"}},
+          "cachedBlockIndices": {"type": "array", "items": {"type": "string"}},
+          "inputGates": {"type": "array", "items": {"$ref": "#/components/schemas/InputGateDto"}},
+          "inputCompressors": {"type": "array", "items": {"$ref": "#/components/schemas/InputCompressorDto"}},
+          "limiters": {"type": "array", "items": {"$ref": "#/components/schemas/LimiterDto"}},
+          "meters": {"$ref": "#/components/schemas/MeterStateDto"}
+        }
       },
       "RawTxDto": {
         "type": "object",

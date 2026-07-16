@@ -40,16 +40,16 @@ public final class LimiterBlockDecoder implements BlockDecoder {
                     state.getBlock(location.release().blockIndex()),
                     location.release().dataOffset()
             );
-            Integer unknownRaw = readUInt16LE(
-                    state.getBlock(location.unknown().blockIndex()),
-                    location.unknown().dataOffset()
+            Integer kneeRaw = readUInt16LE(
+                    state.getBlock(location.knee().blockIndex()),
+                    location.knee().dataOffset()
             );
             Integer thresholdRaw = readUInt16LE(
                     state.getBlock(location.threshold().blockIndex()),
                     location.threshold().dataOffset()
             );
 
-            if (attackRaw == null || releaseRaw == null || unknownRaw == null || thresholdRaw == null) {
+            if (attackRaw == null || releaseRaw == null || kneeRaw == null || thresholdRaw == null) {
                 continue;
             }
 
@@ -64,13 +64,13 @@ public final class LimiterBlockDecoder implements BlockDecoder {
                     location.attack().dataOffset(),
                     location.release().blockIndex(),
                     location.release().dataOffset(),
-                    location.unknown().blockIndex(),
-                    location.unknown().dataOffset(),
+                    location.knee().blockIndex(),
+                    location.knee().dataOffset(),
                     location.threshold().blockIndex(),
                     location.threshold().dataOffset(),
                     attackRaw,
                     releaseRaw,
-                    unknownRaw,
+                    kneeRaw,
                     thresholdRaw
             );
 
@@ -78,7 +78,7 @@ public final class LimiterBlockDecoder implements BlockDecoder {
                     location.channel(),
                     attackMs,
                     releaseMs,
-                    unknownRaw,
+                    kneeRaw,
                     thresholdDb,
                     source
             );
@@ -86,12 +86,12 @@ public final class LimiterBlockDecoder implements BlockDecoder {
             if (log != null) {
                 log.accept(String.format(
                         Locale.ROOT,
-                        "LIMIT RX %s -> attack=%.0f ms release=%.0f ms threshold=%.1f dB unknown=0x%04X",
+                        "LIMIT RX %s -> attack=%.0f ms release=%.0f ms threshold=%.1f dB knee=%.0f dB",
                         location.channel().displayName(),
                         attackMs,
                         releaseMs,
                         thresholdDb,
-                        unknownRaw & 0xFFFF
+                        (double) kneeRaw
                 ));
             }
         }

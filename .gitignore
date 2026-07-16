@@ -12,6 +12,8 @@ bin/
 # IntelliJ
 .idea/
 *.iml
+apache-karaf-4.4.11
+systems
 
 # VS Code
 .vscode/
