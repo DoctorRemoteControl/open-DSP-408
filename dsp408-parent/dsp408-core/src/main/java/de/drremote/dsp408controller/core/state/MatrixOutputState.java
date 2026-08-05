@@ -12,6 +12,8 @@ public final class MatrixOutputState {
     private final DspChannel output;
     private final Set<DspChannel> routedInputs = EnumSet.noneOf(DspChannel.class);
     private final Map<DspChannel, Double> crosspointGainDb = new EnumMap<>(DspChannel.class);
+    private final Set<DspChannel> crosspointGainsConfirmedFromDevice = EnumSet.noneOf(DspChannel.class);
+    private final Map<DspChannel, String> crosspointGainUpdateSources = new EnumMap<>(DspChannel.class);
 
     public MatrixOutputState(DspChannel output) {
         this.output = output;
@@ -41,7 +43,24 @@ public final class MatrixOutputState {
     }
 
     public synchronized void setCrosspointGain(DspChannel input, double db) {
+        setCrosspointGain(input, db, null, false);
+    }
+
+    public synchronized void setCrosspointGain(DspChannel input,
+                                               double db,
+                                               String source,
+                                               boolean confirmedFromDevice) {
         crosspointGainDb.put(input, db);
+        if (confirmedFromDevice) {
+            crosspointGainsConfirmedFromDevice.add(input);
+        } else {
+            crosspointGainsConfirmedFromDevice.remove(input);
+        }
+        if (source == null) {
+            crosspointGainUpdateSources.remove(input);
+        } else {
+            crosspointGainUpdateSources.put(input, source);
+        }
     }
 
     public synchronized Double crosspointGain(DspChannel input) {
@@ -50,5 +69,13 @@ public final class MatrixOutputState {
 
     public synchronized Map<DspChannel, Double> crosspointGainsSnapshot() {
         return Map.copyOf(crosspointGainDb);
+    }
+
+    public synchronized boolean crosspointGainConfirmedFromDevice(DspChannel input) {
+        return crosspointGainsConfirmedFromDevice.contains(input);
+    }
+
+    public synchronized String crosspointGainUpdateSource(DspChannel input) {
+        return crosspointGainUpdateSources.get(input);
     }
 }

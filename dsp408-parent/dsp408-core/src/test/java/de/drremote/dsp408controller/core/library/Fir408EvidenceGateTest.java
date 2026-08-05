@@ -2,6 +2,7 @@ package de.drremote.dsp408controller.core.library;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.HashSet;
@@ -47,6 +48,10 @@ class Fir408EvidenceGateTest {
         assertFalse(meters.channelMappingConfirmed());
         assertTrue(meters.levelCalibrationConfirmed());
         assertTrue(meters.limiterMappingConfirmed());
+        assertEquals(16176.0, meters.clipThresholdRaw());
+        assertTrue(meters.clipThresholdConfirmed(DspChannel.IN_A));
+        assertTrue(meters.clipThresholdConfirmed(DspChannel.IN_B));
+        assertFalse(meters.clipThresholdConfirmed(DspChannel.OUT_1));
     }
 
     @Test
@@ -55,7 +60,7 @@ class Fir408EvidenceGateTest {
 
         assertEquals(Set.of(DspChannel.values()), writes.channels(Operation.PHASE));
         assertEquals(outputChannels(), writes.channels(Operation.OUTPUT_PEQ));
-        assertEquals(Set.of(DspChannel.IN_A, DspChannel.IN_D), writes.channels(Operation.INPUT_PEQ));
+        assertEquals(inputChannels(), writes.channels(Operation.INPUT_PEQ));
         assertEquals(Set.of(), writes.channels(Operation.INPUT_GEQ));
         assertEquals(Set.of(DspChannel.IN_A, DspChannel.IN_D), writes.channels(Operation.INPUT_GATE));
 

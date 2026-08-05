@@ -49,6 +49,8 @@ public final class MeterPayloadDecoder {
             return;
         }
 
+        state.markMeterRuntimePayloadFromDevice(payload, "cmd40");
+
         for (MeterSlotLocation slot : layout.slots()) {
             int offset = slot.payloadOffset();
             if (payload.length < offset + slot.widthBytes() || slot.widthBytes() < 3) {
@@ -66,6 +68,23 @@ public final class MeterPayloadDecoder {
                     slotByte2,
                     String.format(Locale.ROOT, "cmd40@%02X", offset)
             );
+
+            if (layout.clipThresholdRaw() != null
+                    && layout.clipThresholdConfirmed(slot.channel())) {
+                int rawValue = rawLow | (rawHigh << 8);
+                double preciseRawValue = rawValue + (slotByte2 / 256.0);
+                state.markMeterClipFromDevice(
+                        slot.channel(),
+                        preciseRawValue >= layout.clipThresholdRaw(),
+                        String.format(
+                                Locale.ROOT,
+                                "cmd40@%02X raw=%.6f threshold=%.6f",
+                                offset,
+                                preciseRawValue,
+                                layout.clipThresholdRaw()
+                        )
+                );
+            }
 
             if (log != null) {
                 int rawValue = rawLow | (rawHigh << 8);

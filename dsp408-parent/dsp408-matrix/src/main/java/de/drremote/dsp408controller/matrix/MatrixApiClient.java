@@ -80,6 +80,25 @@ public final class MatrixApiClient {
         sendNoBody(request);
     }
 
+    public JsonNode getState(String roomId, String eventType, String stateKey)
+            throws IOException, InterruptedException {
+        String path = "/_matrix/client/v3/rooms/" + url(roomId)
+                + "/state/" + url(eventType) + "/" + url(stateKey);
+        return sendJson(authorizedGet(path));
+    }
+
+    public void sendState(String roomId, String eventType, String stateKey, JsonNode content)
+            throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/_matrix/client/v3/rooms/" + url(roomId)
+                        + "/state/" + url(eventType) + "/" + url(stateKey)))
+                .header("Authorization", "Bearer " + accessToken)
+                .header("Content-Type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString(content.toString(), StandardCharsets.UTF_8))
+                .build();
+        sendNoBody(request);
+    }
+
     private HttpRequest authorizedGet(String path) {
         return HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))

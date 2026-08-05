@@ -34,11 +34,15 @@ This bundle exposes `DspService` through an OSGi HTTP Whiteboard servlet. It is 
 - `POST /api/v1/connection/disconnect`
 - `POST /api/v1/device/login`
 - `POST /api/v1/preset/load`
+- `POST /api/v1/preset/store`
+- `GET /api/v1/preset/export`
 - `POST /api/v1/preset/name/read`
 - `POST /api/v1/preset/validate`
 - `POST /api/v1/preset/apply`
 - `GET /api/v1/channels`
 - `GET /api/v1/channels/{channelId}`
+- `GET /api/v1/matrix`
+- `GET /api/v1/matrix/{outputId}`
 - `GET /api/v1/channels/{channelId}/gate`
 - `GET /api/v1/channels/{channelId}/meter`
 - `POST /api/v1/channels/{channelId}/name`
@@ -56,12 +60,14 @@ This bundle exposes `DspService` through an OSGi HTTP Whiteboard servlet. It is 
 - `POST /api/v1/fir/generator`
 - `POST /api/v1/fir/upload`
 - `POST /api/v1/channels/{channelId}/peq/{peqIndex}`
-- `POST /api/v1/channels/{channelId}/peq/{peqIndex}/{frequency|q|type}`
+- `GET /api/v1/peq` / `GET /api/v1/peq/{channelId}` (decoded values, bypass and device-confirmation state)
+- `POST /api/v1/channels/{channelId}/peq/{peqIndex}/{frequency|q|type|bypass}`
 - `POST /api/v1/channels/{channelId}/peq/{peqIndex}/q/raw`
 - `POST /api/v1/channels/{channelId}/peq/{peqIndex}/gain`
 - `POST /api/v1/channels/{channelId}/peq/{peqIndex}/gain/code`
 - `POST /api/v1/channels/{channelId}/input-peq/{peqIndex}`
 - `POST /api/v1/channels/{channelId}/input-peq/{peqIndex}/{frequency|q|gain|type|bypass}`
+- `POST /api/v1/peq/bypass-all` (`{"bypass":true}`; preflights and updates all 104 PEQs)
 - `POST /api/v1/channels/{channelId}/geq/{bandIndex}/gain`
 - `POST /api/v1/channels/{channelId}/gate`
 - `POST /api/v1/channels/{channelId}/gate/{threshold|hold|attack|release}`
@@ -111,6 +117,29 @@ curl -X POST http://localhost:8181/api/v1/dsps/main/channels/out2/gain \
 ```
 
 ## JSON Presets
+
+Export the complete current FIR408 state, including all 32 raw parameter blocks:
+
+```powershell
+Invoke-WebRequest `
+  -Uri "http://localhost:8181/api/v1/preset/export" `
+  -OutFile ".\fir408-backup.json"
+```
+
+Store the complete active state in a native DSP user slot and verify the slot name:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"slot":"U01","name":"Live Setup"}' `
+  -Uri "http://localhost:8181/api/v1/preset/store"
+```
+
+Recall it later with `POST /api/v1/preset/load` and body `{"slot":"U01"}`.
+FIR408 exposes no raw parameter-block write command, so the JSON export is a
+portable audit/backup while exact restoration is delegated to the DSP's native
+U01..U19 slots.
 
 A complete JSON preset can be validated without changing the DSP:
 

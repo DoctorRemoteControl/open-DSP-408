@@ -10,9 +10,12 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -37,10 +40,14 @@ public final class DspClient implements Closeable {
     private PushbackInputStream in;
     private OutputStream out;
     private Thread readerThread;
+    private Thread commandWorkerThread;
     private ScheduledExecutorService keepAliveExecutor;
     private ScheduledExecutorService meterPollExecutor;
+    private volatile Long meterPollIntervalMs;
     private volatile Consumer<byte[]> payloadListener;
     private long lastTransmitNanos;
+    private final DspTrafficGate trafficGate = new DspTrafficGate();
+    private final DspCommandQueue commandQueue = new DspCommandQueue();
 
     public DspClient(DspConnectionConfig config, Consumer<String> log) {
         this.config = config;
@@ -76,9 +83,12 @@ public final class DspClient implements Closeable {
             in = newIn;
             out = newOut;
             lastTransmitNanos = 0L;
+            trafficGate.reset();
+            commandQueue.open();
             running.set(true);
 
             startReader();
+            startCommandWorker();
             log("Connected to " + config.ip() + ":" + config.port());
 
             sendHandshakeSequence();
@@ -105,8 +115,8 @@ public final class DspClient implements Closeable {
         sendPayload(DspProtocol.systemInfoRequest());
     }
 
-    public void requestRuntimeMeters() throws IOException {
-        sendPayload(DspProtocol.runtimeMeterRequest());
+    public boolean requestRuntimeMeters() throws IOException {
+        return sendPayload(DspProtocol.runtimeMeterRequest());
     }
 
     public void readParameterBlock(int blockIndex) throws IOException {
@@ -125,6 +135,18 @@ public final class DspClient implements Closeable {
         sendPayload(DspProtocol.loadPreset(slotLabel));
     }
 
+    public void setPresetName(String name) throws IOException {
+        sendPayload(DspProtocol.buildPresetName(name));
+    }
+
+    public void storePreset(int presetIndex) throws IOException {
+        sendPayload(DspProtocol.storePreset(presetIndex));
+    }
+
+    public void storePreset(String slotLabel) throws IOException {
+        sendPayload(DspProtocol.storePreset(slotLabel));
+    }
+
     public synchronized void startMeterPolling(long intervalMs) {
         if (intervalMs < 50) {
             throw new IllegalArgumentException("Meter poll interval must be >= 50 ms");
@@ -137,6 +159,7 @@ public final class DspClient implements Closeable {
             t.setDaemon(true);
             return t;
         });
+        meterPollIntervalMs = intervalMs;
 
         meterPollExecutor.scheduleAtFixedRate(() -> {
             if (!running.get()) {
@@ -155,6 +178,7 @@ public final class DspClient implements Closeable {
     public synchronized void stopMeterPolling() {
         ScheduledExecutorService executor = meterPollExecutor;
         meterPollExecutor = null;
+        meterPollIntervalMs = null;
         if (executor != null) {
             executor.shutdownNow();
             log("Meter polling stopped");
@@ -179,7 +203,7 @@ public final class DspClient implements Closeable {
     }
 
     public void setGain(int channelIndex, double db) throws IOException {
-        sendPayload(DspProtocol.buildGain(channelIndex, db));
+        sendReliableWritePayload(DspProtocol.buildGain(channelIndex, db));
     }
 
     public void setGain(DspChannel channel, double db) throws IOException {
@@ -262,7 +286,25 @@ public final class DspClient implements Closeable {
                              double frequencyHz,
                              double q,
                              PeqFilterType filterType) throws IOException {
-        sendPayload(DspProtocol.buildOutputPeq(outputNumber, peqIndex, gainDb, frequencyHz, q, filterType));
+        setOutputPeq(outputNumber, peqIndex, gainDb, frequencyHz, q, filterType, false);
+    }
+
+    public void setOutputPeq(int outputNumber,
+                             int peqIndex,
+                             double gainDb,
+                             double frequencyHz,
+                             double q,
+                             PeqFilterType filterType,
+                             boolean bypass) throws IOException {
+        sendPayload(DspProtocol.buildOutputPeq(
+                outputNumber,
+                peqIndex,
+                gainDb,
+                frequencyHz,
+                q,
+                filterType,
+                bypass
+        ));
     }
 
     public void setInputPeq(int inputChannelIndex,
@@ -404,7 +446,7 @@ public final class DspClient implements Closeable {
                            double releaseMs,
                            int kneeRaw,
                            double thresholdDb) throws IOException {
-        sendPayload(DspProtocol.buildLimiter(
+        sendReliableWritePayload(DspProtocol.buildLimiter(
                 output,
                 attackMs,
                 releaseMs,
@@ -418,7 +460,7 @@ public final class DspClient implements Closeable {
                            int releaseRaw,
                            int kneeRaw,
                            int thresholdRaw) throws IOException {
-        sendPayload(DspProtocol.buildLimiter(
+        sendReliableWritePayload(DspProtocol.buildLimiter(
                 output,
                 attackRaw,
                 releaseRaw,
@@ -451,16 +493,86 @@ public final class DspClient implements Closeable {
         this.payloadListener = listener;
     }
 
-    public synchronized void sendPayload(byte[] payload) throws IOException {
+    public boolean sendPayload(byte[] payload) throws IOException {
+        return enqueuePayload(payload, false);
+    }
+
+    public DspTrafficSnapshot trafficSnapshot() {
+        DspCommandQueue.Stats stats = commandQueue.stats();
+        return new DspTrafficSnapshot(
+                stats.pendingCommands(),
+                stats.maxPendingCommands(),
+                stats.submittedCommands(),
+                stats.transmittedCommands(),
+                stats.supersededCommands(),
+                stats.meterTransmissions(),
+                stats.coalescedMeterRequests(),
+                stats.controlTransmissions(),
+                stats.writeRetries(),
+                stats.unacknowledgedWrites(),
+                stats.activePriority(),
+                stats.lastTransmitEpochMs(),
+                meterPollExecutor != null,
+                meterPollIntervalMs
+        );
+    }
+
+    private void sendReliableWritePayload(byte[] payload) throws IOException {
+        /*
+         * FIR408 ACK frames are generic and are also emitted for keep-alives.
+         * They cannot be correlated safely with an individual parameter write.
+         * A retry based on a missing generic ACK can therefore duplicate writes
+         * and stall the queue. Socket write success is the transport contract;
+         * the central queue still serializes, paces and coalesces commands.
+         */
+        enqueuePayload(payload, false);
+    }
+
+    private boolean enqueuePayload(byte[] payload, boolean reliableWrite) throws IOException {
         ensureConnected();
+        DspCommandQueue.Priority priority = priorityOf(payload);
+        CompletableFuture<Boolean> completion = commandQueue.submit(
+                payload,
+                priority,
+                coalesceKey(payload),
+                reliableWrite
+        );
+
+        try {
+            return completion.get(15L, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting for DSP command queue", e);
+        } catch (TimeoutException e) {
+            throw new IOException("DSP command queue timed out", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof IOException io) {
+                throw io;
+            }
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IOException("DSP command failed", cause);
+        }
+    }
+
+    private boolean transmitPayload(byte[] payload) throws IOException {
+        ensureConnected();
+        if (!trafficGate.mayTransmit(payload, System.nanoTime())) {
+            log("--> TX coalesced runtime meter request");
+            return false;
+        }
         awaitTransmitSlot();
 
         byte[] frame = DspFrameCodec.encode(payload);
         out.write(frame);
         out.flush();
         lastTransmitNanos = System.nanoTime();
+        trafficGate.recordTransmitted(payload, lastTransmitNanos);
 
         log("--> TX payload=" + Hex.format(payload) + " | frame=" + Hex.format(frame));
+        return true;
     }
 
     private void awaitTransmitSlot() throws IOException {
@@ -487,6 +599,37 @@ public final class DspClient implements Closeable {
         readerThread = new Thread(this::readLoop, "dsp408-reader");
         readerThread.setDaemon(true);
         readerThread.start();
+    }
+
+    private synchronized void startCommandWorker() {
+        commandWorkerThread = new Thread(this::commandWorkerLoop, "dsp408-command-queue");
+        commandWorkerThread.setDaemon(true);
+        commandWorkerThread.start();
+    }
+
+    private void commandWorkerLoop() {
+        while (running.get()) {
+            DspCommandQueue.Command command;
+            try {
+                command = commandQueue.take();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            if (command == null) {
+                break;
+            }
+
+            try {
+                boolean transmitted = transmitPayload(command.payload());
+                commandQueue.complete(command, transmitted);
+            } catch (Exception e) {
+                commandQueue.fail(command, e);
+                if (running.get()) {
+                    log("Command queue error: " + e.getMessage());
+                }
+            }
+        }
     }
 
     private synchronized void startKeepAlive() {
@@ -577,6 +720,49 @@ public final class DspClient implements Closeable {
         }
     }
 
+    private static DspCommandQueue.Priority priorityOf(byte[] payload) {
+        if (DspProtocol.isRuntimeMeterRequest(payload)) {
+            return DspCommandQueue.Priority.METER;
+        }
+        int command = commandByte(payload);
+        if (command == 0x35 || command == 0x3F) {
+            return DspCommandQueue.Priority.SAFETY;
+        }
+        if (command == 0x27) {
+            return DspCommandQueue.Priority.READ;
+        }
+        if (command == 0x12) {
+            return DspCommandQueue.Priority.KEEPALIVE;
+        }
+        return DspCommandQueue.Priority.CONTROL;
+    }
+
+    private static String coalesceKey(byte[] payload) {
+        if (DspProtocol.isRuntimeMeterRequest(payload)) {
+            return "meter";
+        }
+        int command = commandByte(payload);
+        if (command == 0x12) {
+            return "keepalive";
+        }
+        if (command == 0x27 && payload.length > 4) {
+            return "block:" + (payload[4] & 0xFF);
+        }
+        if ((command == 0x34
+                || command == 0x35
+                || command == 0x36
+                || command == 0x38
+                || command == 0x3F)
+                && payload.length > 4) {
+            return "command:" + command + ":channel:" + (payload[4] & 0xFF);
+        }
+        return null;
+    }
+
+    private static int commandByte(byte[] payload) {
+        return payload != null && payload.length > 3 ? payload[3] & 0xFF : -1;
+    }
+
     @Override
     public synchronized void close() {
         internalClose(true);
@@ -589,7 +775,15 @@ public final class DspClient implements Closeable {
                 || out != null
                 || keepAliveExecutor != null
                 || meterPollExecutor != null
-                || readerThread != null;
+                || readerThread != null
+                || commandWorkerThread != null;
+
+        commandQueue.close(new IOException("DSP connection closed"));
+        Thread commandWorker = commandWorkerThread;
+        commandWorkerThread = null;
+        if (commandWorker != null && commandWorker != Thread.currentThread()) {
+            commandWorker.interrupt();
+        }
 
         ScheduledExecutorService keepAlive = keepAliveExecutor;
         keepAliveExecutor = null;
@@ -612,6 +806,7 @@ public final class DspClient implements Closeable {
         socket = null;
         readerThread = null;
         lastTransmitNanos = 0L;
+        meterPollIntervalMs = null;
         // payloadListener absichtlich NICHT nullen:
         // sonst verliert der Client nach Reconnect still seinen Decoder/State-Listener.
 

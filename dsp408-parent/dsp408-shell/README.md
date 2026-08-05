@@ -223,7 +223,9 @@ dsp408:meter out1
 dsp408:dsp fir408 meter out1
 ```
 
-The channel result contains the decoded `levelDb` and, for outputs, `limiterActive`.
+The channel result contains the decoded `levelDb`, the per-channel `clipActive`
+state derived at the FIR408's +12 dB meter threshold, and, for outputs,
+`limiterActive`.
 
 ## Matrix Routing
 
@@ -308,6 +310,7 @@ dsp408:opeqfreq out1 1 1000
 dsp408:opeqq out1 1 1.0
 dsp408:opeqgain out1 1 -3
 dsp408:opeqtype out1 1 peak
+dsp408:opeqbypass out1 1 on
 ```
 
 Set a complete input PEQ band:
@@ -315,6 +318,15 @@ Set a complete input PEQ band:
 ```text
 dsp408:ipeqset ina 1 peak 1000 1.0 -3 on
 ```
+
+Bypass or re-enable all 104 PEQs (InA..InD PEQ1..8 and Out1..Out8 PEQ1..9):
+
+```text
+dsp408:peqallbypass on
+dsp408:peqallbypass off
+```
+
+The command validates all cached PEQ fields before the first write. Run `dsp408:scanblocks` first after connecting.
 
 Set an input GEQ band:
 

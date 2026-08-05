@@ -28,6 +28,11 @@ public final class DspState {
     private final TestToneState testToneState = new TestToneState();
 
     private final Map<Integer, byte[]> lastBlocks = new ConcurrentHashMap<>();
+    private final Map<Integer, Long> blockRevisions = new ConcurrentHashMap<>();
+    private final Map<Integer, String> presetNames = new ConcurrentHashMap<>();
+    private final Map<Integer, Long> presetNameRevisions = new ConcurrentHashMap<>();
+    private long nextBlockRevision;
+    private long nextPresetNameRevision;
 
     public DspState() {
         reset();
@@ -65,6 +70,11 @@ public final class DspState {
         meterState.reset();
         testToneState.reset();
         lastBlocks.clear();
+        blockRevisions.clear();
+        presetNames.clear();
+        presetNameRevisions.clear();
+        nextBlockRevision = 0L;
+        nextPresetNameRevision = 0L;
     }
 
     public synchronized ChannelState channel(DspChannel channel) {
@@ -249,7 +259,17 @@ public final class DspState {
     public synchronized void markMatrixCrosspointGain(DspChannel output, DspChannel input, double db) {
         MatrixOutputState state = matrixOutputs.get(output);
         if (state != null) {
-            state.setCrosspointGain(input, db);
+            state.setCrosspointGain(input, db, "tx", false);
+        }
+    }
+
+    public synchronized void markMatrixCrosspointGainFromDevice(DspChannel output,
+                                                                 DspChannel input,
+                                                                 double db,
+                                                                 String source) {
+        MatrixOutputState state = matrixOutputs.get(output);
+        if (state != null) {
+            state.setCrosspointGain(input, db, source, true);
         }
     }
 
@@ -259,6 +279,7 @@ public final class DspState {
                                                double frequencyHz,
                                                double q,
                                                PeqFilterType filterType,
+                                               boolean bypass,
                                                String source) {
         OutputPeqState state = outputPeqs.get(output);
         if (state == null) {
@@ -270,6 +291,7 @@ public final class DspState {
         band.updateFrequency(frequencyHz, source, false);
         band.updateQ(q, source, false);
         band.updateFilterType(filterType, source, false);
+        band.updateBypass(bypass, source, false);
     }
 
     public synchronized void markOutputPeqFromDevice(DspChannel output,
@@ -566,6 +588,19 @@ public final class DspState {
         meterState.updateStatusByte(statusByteRaw, source, true);
     }
 
+    public synchronized void markMeterRuntimePayloadFromDevice(byte[] payload, String source) {
+        meterState.updateRuntimePayload(payload, source, true);
+    }
+
+    public synchronized void markMeterClipFromDevice(DspChannel channel,
+                                                     boolean active,
+                                                     String source) {
+        MeterChannelState meter = meterState.channel(channel);
+        if (meter != null) {
+            meter.updateClipFromMeter(active, source, true);
+        }
+    }
+
     public synchronized void markTestToneSource(int sourceIndex, String sourceLabel, String source) {
         testToneState.updateSource(sourceIndex, sourceLabel, source, false);
     }
@@ -590,7 +625,9 @@ public final class DspState {
         if (data == null) {
             return;
         }
-        lastBlocks.put(blockIndex & 0xFF, Arrays.copyOf(data, data.length));
+        int normalizedIndex = blockIndex & 0xFF;
+        lastBlocks.put(normalizedIndex, Arrays.copyOf(data, data.length));
+        blockRevisions.put(normalizedIndex, ++nextBlockRevision);
     }
 
     public synchronized byte[] getBlock(int blockIndex) {
@@ -598,8 +635,52 @@ public final class DspState {
         return data == null ? null : Arrays.copyOf(data, data.length);
     }
 
+    /**
+     * Mirrors a server-originated u16 write into an already cached block.
+     * The receive revision deliberately remains unchanged: it represents
+     * physical DSP replies and is used to detect fresh refresh responses.
+     */
+    public synchronized boolean patchCachedBlockUInt16LE(int blockIndex, int dataOffset, int value) {
+        byte[] data = lastBlocks.get(blockIndex & 0xFF);
+        if (data == null || dataOffset < 0 || dataOffset + 1 >= data.length) {
+            return false;
+        }
+        int normalized = value & 0xFFFF;
+        data[dataOffset] = (byte) (normalized & 0xFF);
+        data[dataOffset + 1] = (byte) ((normalized >>> 8) & 0xFF);
+        return true;
+    }
+
+    /**
+     * Monotonically increasing receive revision for a parameter block.
+     * A caller can record the value before requesting a block and wait until it
+     * changes instead of mistaking an old cache entry for a fresh DSP reply.
+     */
+    public synchronized long blockRevision(int blockIndex) {
+        return blockRevisions.getOrDefault(blockIndex & 0xFF, 0L);
+    }
+
+    public synchronized void storePresetName(int presetIndex, String name) {
+        int normalizedIndex = presetIndex & 0xFF;
+        presetNames.put(normalizedIndex, name == null ? "" : name);
+        presetNameRevisions.put(normalizedIndex, ++nextPresetNameRevision);
+    }
+
+    public synchronized String presetName(int presetIndex) {
+        return presetNames.get(presetIndex & 0xFF);
+    }
+
+    public synchronized long presetNameRevision(int presetIndex) {
+        return presetNameRevisions.getOrDefault(presetIndex & 0xFF, 0L);
+    }
+
     public synchronized boolean hasCachedBlocks() {
         return !lastBlocks.isEmpty();
+    }
+
+    public synchronized void clearCachedBlocks() {
+        lastBlocks.clear();
+        blockRevisions.clear();
     }
 
     public synchronized List<Integer> cachedBlockIndices() {

@@ -18,11 +18,26 @@ public @interface Dsp408Configuration {
     @AttributeDefinition(name = "DSP Port")
     int dsp_port() default 9761;
 
+    @AttributeDefinition(
+            name = "DSP Library",
+            description = "Protocol library selected before the initial dump: fir408, dsp408 or auto."
+    )
+    String dsp_library() default "fir408";
+
     @AttributeDefinition(name = "Auto Connect")
     boolean auto_connect() default false;
 
-    @AttributeDefinition(name = "Auto Read On Connect")
+    @AttributeDefinition(
+            name = "Auto Read On Connect",
+            description = "Compatibility flag. The server always performs one verified full settings-cache synchronization after connecting."
+    )
     boolean auto_read_on_connect() default true;
+
+    @AttributeDefinition(
+            name = "Central Meter Poll Interval ms",
+            description = "The server is the only DSP meter poller. Clients must read GET /meters."
+    )
+    long meter_poll_interval_ms() default 200L;
 
     @AttributeDefinition(name = "Volume Step dB")
     double volume_step_db() default 1.0;

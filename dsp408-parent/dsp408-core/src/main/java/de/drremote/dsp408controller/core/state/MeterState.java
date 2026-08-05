@@ -1,6 +1,7 @@
 package de.drremote.dsp408controller.core.state;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -13,6 +14,10 @@ public final class MeterState {
     private Integer statusByteRaw;
     private String lastStatusUpdateSource;
     private boolean statusConfirmedFromDevice;
+    private byte[] lastRuntimePayload;
+    private long lastRuntimePayloadObservedAtEpochMs;
+    private String lastRuntimePayloadUpdateSource;
+    private boolean runtimePayloadConfirmedFromDevice;
 
     public MeterState() {
         reset();
@@ -26,6 +31,10 @@ public final class MeterState {
         statusByteRaw = null;
         lastStatusUpdateSource = null;
         statusConfirmedFromDevice = false;
+        lastRuntimePayload = null;
+        lastRuntimePayloadObservedAtEpochMs = 0L;
+        lastRuntimePayloadUpdateSource = null;
+        runtimePayloadConfirmedFromDevice = false;
     }
 
     public synchronized MeterChannelState channel(DspChannel channel) {
@@ -48,14 +57,37 @@ public final class MeterState {
         return statusConfirmedFromDevice;
     }
 
+    public synchronized byte[] lastRuntimePayload() {
+        return lastRuntimePayload == null ? null : Arrays.copyOf(lastRuntimePayload, lastRuntimePayload.length);
+    }
+
+    public synchronized Long lastRuntimePayloadObservedAtEpochMs() {
+        return lastRuntimePayload == null ? null : lastRuntimePayloadObservedAtEpochMs;
+    }
+
+    public synchronized String lastRuntimePayloadUpdateSource() {
+        return lastRuntimePayloadUpdateSource;
+    }
+
+    public synchronized boolean runtimePayloadConfirmedFromDevice() {
+        return runtimePayloadConfirmedFromDevice;
+    }
+
     public synchronized void updateStatusByte(int statusByteRaw, String source, boolean confirmed) {
         this.statusByteRaw = statusByteRaw;
         this.lastStatusUpdateSource = source;
         this.statusConfirmedFromDevice = confirmed;
     }
 
+    public synchronized void updateRuntimePayload(byte[] payload, String source, boolean confirmed) {
+        this.lastRuntimePayload = payload == null ? null : Arrays.copyOf(payload, payload.length);
+        this.lastRuntimePayloadObservedAtEpochMs = System.currentTimeMillis();
+        this.lastRuntimePayloadUpdateSource = source;
+        this.runtimePayloadConfirmedFromDevice = confirmed;
+    }
+
     public synchronized boolean hasAnyValues() {
-        if (statusByteRaw != null) {
+        if (statusByteRaw != null || lastRuntimePayload != null) {
             return true;
         }
         return channels.values().stream().anyMatch(MeterChannelState::hasAnyValues);

@@ -28,8 +28,9 @@ This bundle wires `dsp408-api` to `dsp408-core`. It owns the default `DspControl
 - `dsp.id` - default DSP id, default `main`.
 - `dsp.ip` - default DSP IPv4 address, default `192.168.0.166`.
 - `dsp.port` - default DSP TCP port, default `9761`.
+- `dsp.library` - protocol library selected before the startup dump: `fir408`, `dsp408` or `auto`.
 - `auto.connect` - connect configured DSPs during component activation.
-- `auto.read.on.connect` - scan parameter blocks after connecting.
+- `auto.read.on.connect` - compatibility flag; every connection performs a verified full parameter dump.
 - `volume.step.db` - default grouped volume step size.
 - `dsps` - optional additional DSPs as `id=ip` or `id=ip:port`.
 
@@ -53,6 +54,7 @@ Example configuration:
 dsp.id = main
 dsp.ip = 192.168.0.166
 dsp.port = 9761
+dsp.library = fir408
 auto.connect = true
 auto.read.on.connect = true
 dsps = normal408=192.168.0.170:9761,fir408=192.168.0.166:9761

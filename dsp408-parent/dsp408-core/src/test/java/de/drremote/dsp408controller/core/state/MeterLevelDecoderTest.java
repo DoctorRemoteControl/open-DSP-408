@@ -23,4 +23,13 @@ class MeterLevelDecoderTest {
         assertEquals(-60.0, MeterLevelDecoder.decodeDb(0x0000), 0.0);
         assertEquals(-60.0, MeterLevelDecoder.decodeDb(0x2457), 0.0);
     }
+
+    @Test
+    void includesTheThirdSlotByteAsTheFractionalMeterPart() {
+        assertEquals(
+                12.01,
+                MeterLevelDecoder.decodeDb(0x3D24, 0x04),
+                0.01
+        );
+    }
 }

@@ -105,6 +105,8 @@ final class MatrixDspCommandDispatcher {
             case "opeqgain" -> json(service.setOutputPeqGain(arg(args, 0, "Usage: !dsp opeqgain <out> <band> <gainDb>"), intArg(args, 1, "Usage: !dsp opeqgain <out> <band> <gainDb>"), doubleArg(args, 2, "Usage: !dsp opeqgain <out> <band> <gainDb>")));
             case "opeqgcode", "peqgcode" -> json(service.setOutputPeqGainCode(arg(args, 0, "Usage: !dsp opeqgcode <out> <band> <code>"), intArg(args, 1, "Usage: !dsp opeqgcode <out> <band> <code>"), intArg(args, 2, "Usage: !dsp opeqgcode <out> <band> <code>")));
             case "opeqtype" -> json(service.setOutputPeqType(arg(args, 0, "Usage: !dsp opeqtype <out> <band> <type>"), intArg(args, 1, "Usage: !dsp opeqtype <out> <band> <type>"), arg(args, 2, "Usage: !dsp opeqtype <out> <band> <type>")));
+            case "opeqbypass" -> json(service.setOutputPeqBypass(arg(args, 0, "Usage: !dsp opeqbypass <out> <band> <on|off>"), intArg(args, 1, "Usage: !dsp opeqbypass <out> <band> <on|off>"), onOffArg(args, 2, "Usage: !dsp opeqbypass <out> <band> <on|off>")));
+            case "peqallbypass" -> json(service.setAllPeqBypass(onOffArg(args, 0, "Usage: !dsp peqallbypass <on|off>")));
             case "ipeqset" -> json(service.setInputPeq(arg(args, 0, "Usage: !dsp ipeqset <in> <band> <type> <hz> <q> <gainDb> <on|off>"), intArg(args, 1, "Usage: !dsp ipeqset <in> <band> <type> <hz> <q> <gainDb> <on|off>"), arg(args, 2, "Usage: !dsp ipeqset <in> <band> <type> <hz> <q> <gainDb> <on|off>"), doubleArg(args, 3, "Usage: !dsp ipeqset <in> <band> <type> <hz> <q> <gainDb> <on|off>"), doubleArg(args, 4, "Usage: !dsp ipeqset <in> <band> <type> <hz> <q> <gainDb> <on|off>"), doubleArg(args, 5, "Usage: !dsp ipeqset <in> <band> <type> <hz> <q> <gainDb> <on|off>"), onOffArg(args, 6, "Usage: !dsp ipeqset <in> <band> <type> <hz> <q> <gainDb> <on|off>")));
             case "ipeqfreq" -> json(service.setInputPeqFrequency(arg(args, 0, "Usage: !dsp ipeqfreq <in> <band> <hz>"), intArg(args, 1, "Usage: !dsp ipeqfreq <in> <band> <hz>"), doubleArg(args, 2, "Usage: !dsp ipeqfreq <in> <band> <hz>")));
             case "ipeqq" -> json(service.setInputPeqQ(arg(args, 0, "Usage: !dsp ipeqq <in> <band> <q>"), intArg(args, 1, "Usage: !dsp ipeqq <in> <band> <q>"), doubleArg(args, 2, "Usage: !dsp ipeqq <in> <band> <q>")));
@@ -167,7 +169,7 @@ final class MatrixDspCommandDispatcher {
     }
 
     private String loadPreset(DspService service, String[] args) throws Exception {
-        String slot = arg(args, 0, "Usage: !dsp loadpreset <F00|U01..U20|0..20>");
+        String slot = arg(args, 0, "Usage: !dsp loadpreset <F00|U01..U19|0..19>");
         if (slot.matches("\\d+")) {
             return json(service.loadPreset(Integer.parseInt(slot)));
         }
@@ -182,14 +184,15 @@ final class MatrixDspCommandDispatcher {
                 Connection: connect, disconnect, reconnect, connected
                 State: state, status, channels, get <channel>, deviceinfo
                 Meters: meters (read DSP), meterstate (cached), meter <channel> (cached)
-                Device: login <1234>, loadpreset <F00|U01..U20|0..20>, readpresetname <0..19>
+                Device: login <1234>, loadpreset <F00|U01..U19|0..19>, readpresetname <0..19>
                 Blocks: blocks, readblock <hex>, showblock <hex>, scanblocks, refresh
                 Channel: gain <channel> <db>, mute <channel>, unmute <channel>, name <channel> <name>, phase <channel> <0|180>, delay <channel> <ms>, delayunit <ms|m|ft>
                 Matrix routing: route <out> <in>, xgain <out> <in> <db>
                 Crossover: xhpset/xlpset <channel> <hz> <slope> <on|off>, xhpfreq/xlpfreq, xhpslope/xlpslope, xhpbypass/xlpbypass
                 FIR408: firmode <out> <iir|fir>, firgen <out> <type> <window> <hpHz> <lpHz> <taps>, firupload <channel> <name> <coefficients>
-                Output PEQ: opeqset, opeqfreq, opeqq, opeqqraw, opeqgain, opeqgcode, opeqtype
+                Output PEQ: opeqset, opeqfreq, opeqq, opeqqraw, opeqgain, opeqgcode, opeqtype, opeqbypass
                 Input PEQ/GEQ: ipeqset, ipeqfreq, ipeqq, ipeqgain, ipeqtype, ipeqbypass, igeq
+                All PEQ: peqallbypass <on|off> (104 bands, requires complete scanblocks state)
                 Dynamics: gateset, gatethreshold, gatehold, gateattack, gaterelease, compset, compget, limitset, limitget
                 Test tone: tone <hz>, tonesource <analog|pink|white|sine>, tonefreq <hz>, toneraw <0..30>, toneoff
                 Volume room: volume <help|status|refresh|up|down|mute|unmute|set|step>

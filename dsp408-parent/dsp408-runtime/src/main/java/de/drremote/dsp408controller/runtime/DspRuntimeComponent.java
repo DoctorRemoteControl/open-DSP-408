@@ -1,12 +1,23 @@
 package de.drremote.dsp408controller.runtime;
 
 import java.lang.annotation.Annotation;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
@@ -17,6 +28,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import de.drremote.dsp408.api.BlockDto;
+import de.drremote.dsp408.api.AutoLimitLeaseDto;
+import de.drremote.dsp408.api.AutoLimitStatusDto;
 import de.drremote.dsp408.api.ChannelDto;
 import de.drremote.dsp408.api.DeviceInfoDto;
 import de.drremote.dsp408.api.DspInstanceDto;
@@ -24,14 +37,23 @@ import de.drremote.dsp408.api.DspService;
 import de.drremote.dsp408.api.InputCompressorDto;
 import de.drremote.dsp408.api.InputGateDto;
 import de.drremote.dsp408.api.LimiterDto;
+import de.drremote.dsp408.api.MatrixCrosspointDto;
+import de.drremote.dsp408.api.MatrixOutputDto;
 import de.drremote.dsp408.api.MeterDto;
 import de.drremote.dsp408.api.MeterStateDto;
+import de.drremote.dsp408.api.PeqBandDto;
+import de.drremote.dsp408.api.PeqChannelDto;
 import de.drremote.dsp408.api.RawTxDto;
+import de.drremote.dsp408.api.PresetSnapshotDto;
+import de.drremote.dsp408.api.PresetStoreResultDto;
+import de.drremote.dsp408.api.SettingsCacheDto;
 import de.drremote.dsp408.api.StateDto;
+import de.drremote.dsp408.api.TrafficStatusDto;
 import de.drremote.dsp408controller.command.DspCommandProcessor;
 import de.drremote.dsp408controller.core.codec.DspCodecRegistry;
 import de.drremote.dsp408controller.core.net.DspConnectionConfig;
 import de.drremote.dsp408controller.core.net.DspFrameCodec;
+import de.drremote.dsp408controller.core.net.DspTrafficSnapshot;
 import de.drremote.dsp408controller.core.protocol.CrossoverSlope;
 import de.drremote.dsp408controller.core.protocol.DspChannel;
 import de.drremote.dsp408controller.core.protocol.DspProtocol;
@@ -45,6 +67,7 @@ import de.drremote.dsp408controller.core.state.CompressorState;
 import de.drremote.dsp408controller.core.state.CrossoverFilterState;
 import de.drremote.dsp408controller.core.state.InputGateState;
 import de.drremote.dsp408controller.core.state.LimiterState;
+import de.drremote.dsp408controller.core.state.MatrixOutputState;
 import de.drremote.dsp408controller.core.state.MeterChannelState;
 import de.drremote.dsp408controller.core.state.MeterLevelDecoder;
 import de.drremote.dsp408controller.core.state.MeterState;
@@ -59,10 +82,34 @@ import de.drremote.dsp408controller.util.Hex;
 @Designate(ocd = Dsp408Configuration.class)
 public final class DspRuntimeComponent implements DspService {
     private static final Logger LOG = LoggerFactory.getLogger(DspRuntimeComponent.class);
+    private static final long AUTO_LIMIT_LEASE_DEFAULT_MS = 30_000L;
+    private static final long AUTO_LIMIT_LEASE_MIN_MS = 5_000L;
+    private static final long AUTO_LIMIT_LEASE_MAX_MS = 120_000L;
+    private static final int BLOCK_READ_REQUEST_ATTEMPTS = 4;
+    private static final long CONTROL_QUIET_MS = 800L;
+    private static final long BLOCK_RESPONSE_TIMEOUT_MS = 350L;
+    private static final long BLOCK_RESPONSE_POLL_MS = 50L;
+    private static final long PRESET_STORE_SETTLE_MS = 8_000L;
+    private static final int SETTINGS_SYNC_MAX_DUMP_PASSES = 8;
+    private static final int SETTINGS_SYNC_BLOCK_ATTEMPTS_PER_PASS = 4;
+    private static final long SETTINGS_SYNC_TIMEOUT_MS = 90_000L;
+    private static final long SETTINGS_SYNC_SETTLE_MS = 300L;
+    private static final int AUTO_LIMIT_TIGHTENING_MAX_ROUNDS = 16;
+    private static final int CACHED_WRITE_REPEATS = 2;
+    private static final long CACHED_WRITE_REPEAT_DELAY_MS = 350L;
+    private static final long CONNECTION_WATCHDOG_INTERVAL_MS = 1_000L;
+    private static final long DSP_RECONNECT_INITIAL_DELAY_MS = 25_000L;
+    private static final long DSP_RECONNECT_MAX_DELAY_MS = 60_000L;
 
     private final boolean manageDevicePool;
     private final DspController controller = new DspController();
+    private final Object confirmedWriteLock = new Object();
     private final VolumeRoomHandler volumeRoomHandler = new VolumeRoomHandler(this);
+    private final ExecutorService autoLimitExecutor = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "dsp408-auto-limit");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private final DspCommandProcessor shellProcessor =
             new DspCommandProcessor(
@@ -83,6 +130,23 @@ public final class DspRuntimeComponent implements DspService {
     private volatile Dsp408Configuration configuration;
     private volatile String instanceId = "main";
     private volatile Map<String, DspRuntimeComponent> devices = Map.of();
+    private String autoLimitLeaseOwner;
+    private String autoLimitLeaseToken;
+    private long autoLimitLeaseExpiresAtEpochMs;
+    private volatile AutoLimitStatusDto autoLimitStatus = AutoLimitStatusDto.idle();
+    private volatile Future<?> autoLimitFuture;
+    private volatile boolean autoLimitCancelRequested;
+    private volatile AutoLimitUndoSnapshot autoLimitUndoSnapshot;
+    private volatile SettingsCacheDto settingsCacheStatus = SettingsCacheDto.empty();
+    private final DspReconnectSchedule reconnectSchedule = new DspReconnectSchedule(
+            DSP_RECONNECT_INITIAL_DELAY_MS,
+            DSP_RECONNECT_MAX_DELAY_MS
+    );
+    private volatile ScheduledExecutorService connectionWatchdogExecutor;
+    private volatile boolean reconnectDesired;
+    private volatile boolean reconnectAttemptRunning;
+    private long settingsCacheGeneration;
+    private final Map<DspChannel, Integer> confirmedLimiterKnees = new EnumMap<>(DspChannel.class);
 
     public DspRuntimeComponent() {
         this(true);
@@ -96,9 +160,12 @@ public final class DspRuntimeComponent implements DspService {
     void activate(Dsp408Configuration configuration) {
         this.configuration = configuration;
         this.instanceId = normalizeDspId(configuration.dsp_id());
+        controller.setPreferredLibraryType(configuration.dsp_library());
         if (manageDevicePool) {
             rebuildDevicePool(configuration);
         }
+        reconnectDesired = configuration.auto_connect();
+        startConnectionWatchdog();
 
         LOG.info("DSP408 {} activated ({}:{})", instanceId, configuration.dsp_ip(), configuration.dsp_port());
 
@@ -113,14 +180,16 @@ public final class DspRuntimeComponent implements DspService {
 
     @Modified
     void modified(Dsp408Configuration configuration) {
+        Dsp408Configuration oldConfiguration = this.configuration;
         String oldId = instanceId;
         boolean reconnectNeeded =
-                this.configuration != null
+                oldConfiguration != null
                         && controller.isConnected()
-                        && connectionChanged(this.configuration, configuration);
+                        && connectionChanged(oldConfiguration, configuration);
 
         this.configuration = configuration;
         this.instanceId = normalizeDspId(configuration.dsp_id());
+        controller.setPreferredLibraryType(configuration.dsp_library());
         if (manageDevicePool) {
             rebuildDevicePool(configuration);
         }
@@ -135,12 +204,25 @@ public final class DspRuntimeComponent implements DspService {
             } catch (Exception e) {
                 LOG.error("Reconnect after config change failed", e);
             }
+        } else if (controller.isConnected()
+                && (oldConfiguration == null
+                || oldConfiguration.meter_poll_interval_ms() != configuration.meter_poll_interval_ms())) {
+            startCentralMeterPolling();
         }
     }
 
     @Deactivate
     void deactivate() {
+        reconnectDesired = false;
+        reconnectSchedule.cancel();
+        stopConnectionWatchdog();
         closeDevicePool();
+        autoLimitCancelRequested = true;
+        Future<?> runningAutoLimit = autoLimitFuture;
+        if (runningAutoLimit != null) {
+            runningAutoLimit.cancel(true);
+        }
+        autoLimitExecutor.shutdownNow();
         try {
             controller.close();
         } catch (Exception e) {
@@ -224,25 +306,62 @@ public final class DspRuntimeComponent implements DspService {
 
     @Override
     public synchronized String connect() throws Exception {
+        reconnectDesired = true;
+        reconnectAttemptRunning = true;
+        try {
+            String message = connectNow();
+            reconnectSchedule.recordSuccess();
+            return message;
+        } catch (Exception error) {
+            controller.close();
+            markSettingsCacheDisconnected();
+            long retryInMs = reconnectSchedule.recordFailure(System.currentTimeMillis());
+            LOG.warn(
+                    "DSP408 {} connect failed; automatic retry in {} ms: {}",
+                    instanceId,
+                    retryInMs,
+                    safeMessage(error)
+            );
+            throw error;
+        } finally {
+            reconnectAttemptRunning = false;
+        }
+    }
+
+    private String connectNow() throws Exception {
         DspConnectionConfig config = currentConfig();
         controller.connect(config, this::log);
 
-        if (configuration != null && configuration.auto_read_on_connect()) {
-            controller.scanParameterBlocks();
+        SettingsCacheDto cache;
+        try {
+            cache = synchronizeSettingsCache("connect");
+        } catch (Exception error) {
+            LOG.warn("Initial DSP settings synchronization failed: {}", safeMessage(error));
+            cache = settingsCacheStatus;
         }
+        startCentralMeterPolling();
 
-        return "Connected to " + config.ip() + ":" + config.port();
+        return "Connected to " + config.ip() + ":" + config.port()
+                + " (settings cache " + cache.cachedBlockCount()
+                + "/" + cache.expectedBlockCount() + ", "
+                + cache.phase().toLowerCase(Locale.ROOT) + ")";
     }
 
     @Override
     public synchronized String reconnect() throws Exception {
+        reconnectDesired = true;
+        autoLimitUndoSnapshot = null;
         controller.close();
         return connect();
     }
 
     @Override
     public synchronized void disconnect() {
+        reconnectDesired = false;
+        autoLimitUndoSnapshot = null;
+        reconnectSchedule.cancel();
         controller.close();
+        markSettingsCacheDisconnected();
     }
 
     @Override
@@ -263,9 +382,38 @@ public final class DspRuntimeComponent implements DspService {
     }
 
     @Override
+    public synchronized SettingsCacheDto getSettingsCacheStatus() {
+        return settingsCacheStatus;
+    }
+
+    @Override
     public synchronized ChannelDto getChannel(String channelId) {
         DspChannel channel = DspChannel.parse(channelId);
         return toDto(controller.state().channel(channel));
+    }
+
+    @Override
+    public synchronized List<MatrixOutputDto> getMatrixOutputs() {
+        return toMatrixOutputDtos();
+    }
+
+    @Override
+    public synchronized MatrixOutputDto getMatrixOutput(String outputId) {
+        DspChannel output = DspChannel.parse(outputId);
+        if (output.index() < DspChannel.OUT_1.index()) {
+            throw new IllegalArgumentException("Output channel required: Out1..Out8");
+        }
+        return toMatrixOutputDto(controller.state().matrixOutput(output));
+    }
+
+    @Override
+    public synchronized List<PeqChannelDto> getPeqChannels() {
+        return toPeqChannelDtos();
+    }
+
+    @Override
+    public synchronized PeqChannelDto getPeqChannel(String channelId) {
+        return toPeqChannelDto(DspChannel.parse(channelId));
     }
 
     @Override
@@ -313,12 +461,219 @@ public final class DspRuntimeComponent implements DspService {
     }
 
     @Override
+    public synchronized TrafficStatusDto getTrafficStatus() {
+        DspTrafficSnapshot traffic = controller.trafficSnapshot();
+        return new TrafficStatusDto(
+                controller.isConnected(),
+                traffic.pendingCommands(),
+                traffic.maxPendingCommands(),
+                traffic.submittedCommands(),
+                traffic.transmittedCommands(),
+                traffic.supersededCommands(),
+                traffic.meterTransmissions(),
+                traffic.coalescedMeterRequests(),
+                traffic.controlTransmissions(),
+                traffic.writeRetries(),
+                traffic.unacknowledgedWrites(),
+                traffic.activePriority(),
+                traffic.lastTransmitEpochMs() == 0L ? null : traffic.lastTransmitEpochMs(),
+                traffic.centralMeterPolling(),
+                traffic.meterPollIntervalMs(),
+                controller.state().meterState().lastRuntimePayloadObservedAtEpochMs()
+        );
+    }
+
+    @Override
+    public synchronized AutoLimitLeaseDto getAutoLimitLease() {
+        clearExpiredAutoLimitLease();
+        return autoLimitLeaseDto(false, null);
+    }
+
+    @Override
+    public synchronized AutoLimitLeaseDto acquireAutoLimitLease(String owner, long ttlMs) {
+        clearExpiredAutoLimitLease();
+        String normalizedOwner = owner == null ? "" : owner.trim();
+        if (normalizedOwner.isBlank()) {
+            throw new IllegalArgumentException("Auto-Limit owner is required.");
+        }
+        if (normalizedOwner.length() > 80) {
+            normalizedOwner = normalizedOwner.substring(0, 80);
+        }
+        if (autoLimitLeaseToken != null) {
+            return autoLimitLeaseDto(
+                    false,
+                    "Auto-Limit is already running on " + autoLimitLeaseOwner + "."
+            );
+        }
+
+        autoLimitLeaseOwner = normalizedOwner;
+        autoLimitLeaseToken = UUID.randomUUID().toString();
+        autoLimitLeaseExpiresAtEpochMs = System.currentTimeMillis() + normalizeAutoLimitTtl(ttlMs);
+        return autoLimitLeaseDto(true, "Auto-Limit lease acquired.");
+    }
+
+    @Override
+    public synchronized AutoLimitLeaseDto renewAutoLimitLease(String token, long ttlMs) {
+        clearExpiredAutoLimitLease();
+        if (!ownsAutoLimitLeaseInternal(token)) {
+            return autoLimitLeaseDto(false, "Auto-Limit lease is not owned by this client.");
+        }
+        autoLimitLeaseExpiresAtEpochMs = System.currentTimeMillis() + normalizeAutoLimitTtl(ttlMs);
+        return autoLimitLeaseDto(true, "Auto-Limit lease renewed.");
+    }
+
+    @Override
+    public synchronized AutoLimitLeaseDto releaseAutoLimitLease(String token) {
+        clearExpiredAutoLimitLease();
+        if (!ownsAutoLimitLeaseInternal(token)) {
+            return autoLimitLeaseDto(false, "Auto-Limit lease is not owned by this client.");
+        }
+        clearAutoLimitLease();
+        return new AutoLimitLeaseDto(
+                false, true, null, null, null, "Auto-Limit lease released."
+        );
+    }
+
+    @Override
+    public synchronized boolean ownsAutoLimitLease(String token) {
+        clearExpiredAutoLimitLease();
+        return ownsAutoLimitLeaseInternal(token);
+    }
+
+    @Override
+    public synchronized AutoLimitStatusDto getAutoLimitStatus() {
+        return withCurrentAutoLimitUndo(autoLimitStatus);
+    }
+
+    @Override
+    public synchronized AutoLimitStatusDto startAutoLimit(
+            double headroomDb,
+            String targetMode,
+            long measurementMs
+    ) {
+        if (autoLimitStatus.running()) {
+            throw new IllegalStateException("Auto-Limit läuft bereits.");
+        }
+        if (!controller.isConnected()) {
+            throw new IllegalStateException("DSP ist nicht verbunden.");
+        }
+
+        String normalizedMode = AutoLimitPlanner.normalizeMode(targetMode);
+        double normalizedHeadroomDb = AutoLimitPlanner.normalizeHeadroom(headroomDb);
+        long normalizedMeasurementMs = AutoLimitPlanner.normalizeMeasurementMs(measurementMs);
+        AutoLimitLeaseDto lease = acquireAutoLimitLease("DSP server Auto-Limit", AUTO_LIMIT_LEASE_MAX_MS);
+        if (!lease.acquired() || lease.token() == null) {
+            throw new IllegalStateException(lease.message());
+        }
+
+        String jobId = UUID.randomUUID().toString();
+        long startedAtEpochMs = System.currentTimeMillis();
+        autoLimitUndoSnapshot = null;
+        autoLimitCancelRequested = false;
+        autoLimitStatus = new AutoLimitStatusDto(
+                jobId,
+                "QUEUED",
+                true,
+                0,
+                normalizedMode,
+                normalizedHeadroomDb,
+                normalizedMeasurementMs,
+                "Auto-Limit wurde auf dem Server gestartet.",
+                Map.of(),
+                Map.of(),
+                List.of(),
+                startedAtEpochMs,
+                null,
+                false,
+                false,
+                null,
+                null
+        );
+        autoLimitFuture = autoLimitExecutor.submit(() -> runAutoLimit(jobId, lease.token()));
+        return autoLimitStatus;
+    }
+
+    @Override
+    public synchronized AutoLimitStatusDto cancelAutoLimit() {
+        if (!autoLimitStatus.running()) {
+            return getAutoLimitStatus();
+        }
+        if (autoLimitStatus.phase().startsWith("UNDO")) {
+            return getAutoLimitStatus();
+        }
+        autoLimitCancelRequested = true;
+        publishAutoLimitStatus(
+                "CANCELLING",
+                true,
+                autoLimitStatus.progressPercent(),
+                "Auto-Limit wird abgebrochen; vorherige Werte werden wiederhergestellt.",
+                autoLimitStatus.measuredPeaksDb(),
+                autoLimitStatus.appliedThresholdsDb(),
+                new LinkedHashSet<>(autoLimitStatus.activeLimiterIds()),
+                null,
+                autoLimitStatus.rollbackPerformed()
+        );
+        Future<?> running = autoLimitFuture;
+        if (running != null) {
+            running.cancel(true);
+        }
+        return autoLimitStatus;
+    }
+
+    @Override
+    public synchronized AutoLimitStatusDto undoAutoLimit() {
+        if (autoLimitStatus.running()) {
+            throw new IllegalStateException("Auto-Limit oder Rückgängig läuft bereits.");
+        }
+        if (!controller.isConnected()) {
+            throw new IllegalStateException("DSP ist nicht verbunden.");
+        }
+        AutoLimitUndoSnapshot snapshot = autoLimitUndoSnapshot;
+        if (snapshot == null) {
+            throw new IllegalStateException("Kein Auto-Limit-Vorher-Zustand verfügbar.");
+        }
+        AutoLimitLeaseDto lease = acquireAutoLimitLease(
+                "DSP server Auto-Limit undo",
+                AUTO_LIMIT_LEASE_MAX_MS
+        );
+        if (!lease.acquired() || lease.token() == null) {
+            throw new IllegalStateException(lease.message());
+        }
+
+        String jobId = UUID.randomUUID().toString();
+        long startedAtEpochMs = System.currentTimeMillis();
+        autoLimitCancelRequested = false;
+        autoLimitStatus = withCurrentAutoLimitUndo(new AutoLimitStatusDto(
+                jobId,
+                "UNDO_QUEUED",
+                true,
+                0,
+                autoLimitStatus.targetMode(),
+                autoLimitStatus.headroomDb(),
+                autoLimitStatus.measurementMs(),
+                "Vorherige Auto-Limit-Werte werden auf dem Server vorbereitet.",
+                Map.of(),
+                snapshot.thresholdsDb(),
+                List.of(),
+                startedAtEpochMs,
+                null,
+                false,
+                true,
+                snapshot.sourceJobId(),
+                snapshot.createdAtEpochMs()
+        ));
+        autoLimitFuture = autoLimitExecutor.submit(
+                () -> runAutoLimitUndo(jobId, snapshot, lease.token())
+        );
+        return autoLimitStatus;
+    }
+
+    @Override
     public synchronized ChannelDto setGain(String channelId, double db) throws Exception {
         DspChannel channel = DspChannel.parse(channelId);
-        controller.setGain(channel, db);
-        Integer blockIndex = gainBlockIndex(channel);
-        if (blockIndex != null) {
-            readBlockWithWait(blockIndex);
+        writeGainAndUpdateCache(channel, db, "api gain tx repeated");
+        if (channel.index() >= DspChannel.OUT_1.index()) {
+            autoLimitUndoSnapshot = null;
         }
         return toDto(controller.state().channel(channel));
     }
@@ -354,17 +709,47 @@ public final class DspRuntimeComponent implements DspService {
     @Override
     public synchronized BlockDto readBlock(String blockIndexHex) throws Exception {
         int index = parseHexIndex(blockIndexHex);
-        controller.readParameterBlock(index);
-        // Give the device a short moment to respond and the cache to update.
-        Thread.sleep(250);
-        byte[] data = controller.state().getBlock(index);
+        byte[] data = awaitFreshParameterBlock(index);
+        promoteCompleteSettingsCache();
         return toBlockDto(index, data);
     }
 
     @Override
     public synchronized StateDto scanBlocks() throws Exception {
-        controller.scanParameterBlocks();
+        synchronizeSettingsCache("explicit refresh");
         return toStateDto();
+    }
+
+    @Override
+    public synchronized PresetSnapshotDto exportPresetSnapshot() throws Exception {
+        synchronizeSettingsCache("preset JSON export");
+
+        List<BlockDto> blocks = new ArrayList<>();
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        for (int index = 0; index <= controller.maxParameterBlockIndex(); index++) {
+            byte[] data = controller.state().getBlock(index);
+            if (data == null) {
+                throw new IllegalStateException(
+                        "Preset export is incomplete: parameter block " + formatIndexHex(index) + " is missing."
+                );
+            }
+            digest.update((byte) index);
+            digest.update((byte) (data.length & 0xFF));
+            digest.update(data);
+            blocks.add(toBlockDto(index, data));
+        }
+
+        byte[] blockZero = controller.state().getBlock(0);
+        return new PresetSnapshotDto(
+                "fir408-preset-snapshot/1",
+                dspId(),
+                controller.libraryType(),
+                System.currentTimeMillis(),
+                decodeCurrentPresetName(blockZero),
+                Hex.format(digest.digest()).replace(" ", "").toLowerCase(Locale.ROOT),
+                toStateDto(),
+                blocks
+        );
     }
 
     @Override
@@ -372,6 +757,10 @@ public final class DspRuntimeComponent implements DspService {
         byte[] payload = Hex.parseFlexible(payloadHex);
         byte[] frame = DspFrameCodec.encode(payload);
         controller.sendRaw(payload);
+        autoLimitUndoSnapshot = null;
+        markSettingsCacheStale(
+                "A raw command was sent; refresh is required before cached settings are authoritative."
+        );
         return new RawTxDto(
                 Hex.format(payload),
                 Hex.format(frame),
@@ -388,13 +777,67 @@ public final class DspRuntimeComponent implements DspService {
     @Override
     public synchronized RawTxDto loadPreset(String slotLabel) throws Exception {
         controller.loadPreset(slotLabel);
+        autoLimitUndoSnapshot = null;
+        Thread.sleep(1_500L);
+        synchronizeSettingsCache("preset recall " + slotLabel);
         return buildRawTxDto(DspProtocol.loadPreset(slotLabel));
     }
 
     @Override
     public synchronized RawTxDto loadPreset(int presetIndex) throws Exception {
         controller.loadPreset(presetIndex);
+        autoLimitUndoSnapshot = null;
+        Thread.sleep(1_500L);
+        synchronizeSettingsCache("preset recall " + presetIndex);
         return buildRawTxDto(DspProtocol.loadPreset(presetIndex));
+    }
+
+    @Override
+    public synchronized PresetStoreResultDto storePreset(String slotLabel, String name) throws Exception {
+        int presetIndex = DspProtocol.parsePresetSlot(slotLabel);
+        byte[] namePayload = DspProtocol.buildPresetName(name);
+        byte[] storePayload = DspProtocol.storePreset(presetIndex);
+        String normalizedName = decodePresetNamePayload(namePayload);
+
+        String confirmedName = withMeterPollingPaused(() -> {
+            String readbackName = null;
+            for (int attempt = 1; attempt <= 2; attempt++) {
+                controller.setPresetName(normalizedName);
+                controller.storePreset(presetIndex);
+                controller.sendRaw(DspProtocol.keepAlive());
+                // FIR408 writes the complete active configuration to flash.
+                // During that operation it stays silent for roughly 8 seconds,
+                // so an earlier read would be reported as a false failure.
+                Thread.sleep(PRESET_STORE_SETTLE_MS);
+                byte[] blockZero = awaitFreshParameterBlock(0);
+                readbackName = decodeCurrentPresetName(blockZero);
+                if (normalizedName.equals(readbackName)) {
+                    return readbackName;
+                }
+                log("Preset store block-0 readback mismatch for " + slotLabel
+                        + " attempt " + attempt + ": expected=" + normalizedName
+                        + " actual=" + readbackName);
+            }
+            return readbackName;
+        });
+
+        boolean confirmed = normalizedName.equals(confirmedName);
+        if (!confirmed) {
+            throw new IllegalStateException(
+                    "Preset " + slotLabel + " could not be confirmed after storing; read back name was "
+                            + (confirmedName == null ? "missing" : confirmedName) + "."
+            );
+        }
+
+        return new PresetStoreResultDto(
+                String.format(Locale.ROOT, "U%02d", presetIndex),
+                presetIndex,
+                normalizedName,
+                System.currentTimeMillis(),
+                true,
+                confirmedName,
+                List.of(buildRawTxDto(namePayload), buildRawTxDto(storePayload))
+        );
     }
 
     @Override
@@ -565,7 +1008,7 @@ public final class DspRuntimeComponent implements DspService {
         DspChannel channel = DspChannel.parse(channelId);
         PeqFilterType type = PeqFilterType.parse(filterType);
         controller.setOutputPeq(channel, peqIndex, type, frequencyHz, q, gainDb);
-        return buildRawTxDto(DspProtocol.buildOutputPeq(outputNumber(channel), peqIndex, gainDb, frequencyHz, q, type));
+        return buildOutputPeqRawTxDto(channel, peqIndex);
     }
 
     @Override
@@ -611,6 +1054,13 @@ public final class DspRuntimeComponent implements DspService {
     }
 
     @Override
+    public synchronized RawTxDto setOutputPeqBypass(String channelId, int peqIndex, boolean bypass) throws Exception {
+        DspChannel channel = DspChannel.parse(channelId);
+        controller.setOutputPeqBypass(channel, peqIndex, bypass);
+        return buildOutputPeqRawTxDto(channel, peqIndex);
+    }
+
+    @Override
     public synchronized RawTxDto setInputPeq(String channelId, int peqIndex, String filterType, double frequencyHz,
                                              double q, double gainDb, boolean bypass) throws Exception {
         DspChannel channel = DspChannel.parse(channelId);
@@ -652,6 +1102,27 @@ public final class DspRuntimeComponent implements DspService {
         DspChannel channel = DspChannel.parse(channelId);
         controller.setInputPeqBypass(channel, peqIndex, bypass);
         return buildInputPeqRawTxDto(channel, peqIndex);
+    }
+
+    @Override
+    public synchronized List<RawTxDto> setAllPeqBypass(boolean bypass) throws Exception {
+        controller.setAllPeqBypass(bypass);
+
+        List<RawTxDto> payloads = new ArrayList<>(104);
+        for (DspChannel input : List.of(
+                DspChannel.IN_A, DspChannel.IN_B, DspChannel.IN_C, DspChannel.IN_D)) {
+            for (int peqIndex = 1; peqIndex <= 8; peqIndex++) {
+                payloads.add(buildInputPeqRawTxDto(input, peqIndex));
+            }
+        }
+        for (DspChannel output : List.of(
+                DspChannel.OUT_1, DspChannel.OUT_2, DspChannel.OUT_3, DspChannel.OUT_4,
+                DspChannel.OUT_5, DspChannel.OUT_6, DspChannel.OUT_7, DspChannel.OUT_8)) {
+            for (int peqIndex = 1; peqIndex <= 9; peqIndex++) {
+                payloads.add(buildOutputPeqRawTxDto(output, peqIndex));
+            }
+        }
+        return List.copyOf(payloads);
     }
 
     @Override
@@ -724,12 +1195,13 @@ public final class DspRuntimeComponent implements DspService {
     public synchronized RawTxDto setLimiter(String outputId, double thresholdDb, double attackMs, double releaseMs)
             throws Exception {
         DspChannel output = DspChannel.parse(outputId);
-        LimiterState limiter = controller.state().limiter(output);
-        int kneeRaw = limiter == null || limiter.kneeDb() == null ? 0 : (int) Math.round(limiter.kneeDb());
-        if (kneeRaw < 0 || kneeRaw > 12) {
-            kneeRaw = 0;
-        }
-        controller.setLimiter(output, thresholdDb, attackMs, releaseMs);
+        rememberConfirmedLimiterKnees();
+        int kneeRaw = writeLimiterAndUpdateCache(
+                output,
+                new LimiterSettings(thresholdDb, attackMs, releaseMs),
+                "api limiter tx repeated"
+        );
+        autoLimitUndoSnapshot = null;
         return buildRawTxDto(DspProtocol.buildLimiter(output, attackMs, releaseMs, kneeRaw, thresholdDb));
     }
 
@@ -773,8 +1245,8 @@ public final class DspRuntimeComponent implements DspService {
 
     @Override
     public synchronized StateDto requestRuntimeMeters() throws Exception {
-        controller.requestRuntimeMeters();
-        Thread.sleep(250);
+        // The server-owned poller is the only source of fresh DSP meter requests.
+        // Keep the legacy endpoint cache-only so old clients cannot flood the DSP.
         return toStateDto();
     }
 
@@ -787,12 +1259,1460 @@ public final class DspRuntimeComponent implements DspService {
         T execute(DspController controller) throws Exception;
     }
 
+    private void runAutoLimit(String jobId, String leaseToken) {
+        Map<String, LimiterSettings> previousById = new LinkedHashMap<>();
+        LinkedHashSet<String> appliedIds = new LinkedHashSet<>();
+        Map<String, Double> previousGainsDb = new LinkedHashMap<>();
+        Map<String, Double> adjustedGainsDb = new LinkedHashMap<>();
+        LinkedHashSet<String> appliedGainIds = new LinkedHashSet<>();
+        Map<String, Double> peaksDb = new LinkedHashMap<>();
+        Map<String, Double> thresholdsDb = new LinkedHashMap<>();
+        Set<String> activeIds = new LinkedHashSet<>();
+        boolean rollbackPerformed = false;
+        try {
+            List<LimiterDto> limiters = readConfirmedAutoLimiters();
+            List<String> outputIds = limiters.stream().map(LimiterDto::id).toList();
+            for (LimiterDto limiter : limiters) {
+                if (limiter.thresholdDb() != null
+                        && limiter.attackMs() != null
+                        && limiter.releaseMs() != null) {
+                    previousById.put(
+                            limiter.id(),
+                            new LimiterSettings(
+                                    limiter.thresholdDb(),
+                                    limiter.attackMs(),
+                                    limiter.releaseMs()
+                            )
+                    );
+                }
+            }
+            if (previousById.size() != outputIds.size()) {
+                throw new IllegalStateException("Nicht alle vorherigen Limiterwerte sind verfügbar.");
+            }
+
+            AutoLimitStatusDto initialStatus = getAutoLimitStatus();
+            long measurementMs = initialStatus.measurementMs();
+            publishAutoLimitStatus(
+                    "MEASURING",
+                    true,
+                    1,
+                    "Lauteste Passage abspielen: Server misst die Ausgänge …",
+                    peaksDb,
+                    thresholdsDb,
+                    activeIds,
+                    null,
+                    false
+            );
+            int measurementSamples = Math.max(1, (int) Math.ceil(measurementMs / 375.0));
+            long lastMeasurementEpochMs = 0L;
+            for (int sample = 0; sample < measurementSamples; sample++) {
+                checkAutoLimitCancelled();
+                MeterStateDto meters = awaitFreshAutoLimitMeters(lastMeasurementEpochMs);
+                lastMeasurementEpochMs = meters.observedAtEpochMs();
+                rejectInputClipping(meters);
+                for (MeterDto meter : meters.channels()) {
+                    if (meter.id().startsWith("out")
+                            && meter.levelConfirmedFromDevice()
+                            && meter.levelDb() != null
+                            && meter.levelDb() > AutoLimitPlanner.MIN_SIGNAL_DB) {
+                        peaksDb.merge(meter.id(), meter.levelDb(), Math::max);
+                    }
+                }
+                int progress = 2 + ((sample + 1) * 33 / measurementSamples);
+                publishAutoLimitStatus(
+                        "MEASURING",
+                        true,
+                        progress,
+                        "Referenzpegel wird gemessen (" + (sample + 1) + "/" + measurementSamples + ") …",
+                        peaksDb,
+                        thresholdsDb,
+                        activeIds,
+                        null,
+                        false
+                );
+                if (sample + 1 < measurementSamples) {
+                    Thread.sleep(375L);
+                }
+            }
+            if (peaksDb.isEmpty()) {
+                throw new IllegalStateException("Kein aktiver Ausgang über -50 dB erkannt.");
+            }
+
+            String targetMode = initialStatus.targetMode();
+            thresholdsDb = new LinkedHashMap<>(AutoLimitPlanner.initialThresholds(
+                    outputIds,
+                    peaksDb,
+                    initialStatus.headroomDb(),
+                    targetMode
+            ));
+            if (thresholdsDb.isEmpty()) {
+                throw new IllegalStateException("Keine Ausgangsschwelle konnte berechnet werden.");
+            }
+
+            List<String> targetIds = thresholdsDb.keySet().stream().toList();
+            renewServerAutoLimitLease(leaseToken);
+            checkAutoLimitCancelled();
+            publishAutoLimitStatus(
+                    "WRITING",
+                    true,
+                    36,
+                    "Schreibe " + targetIds.size() + " Limiter in einer DSP-Transaktion …",
+                    peaksDb,
+                    thresholdsDb,
+                    activeIds,
+                    null,
+                    false
+            );
+            setLimitersReliably(
+                    limiterSettingsFor(
+                            targetIds,
+                            thresholdsDb,
+                            AutoLimitPlanner.ATTACK_MS,
+                            AutoLimitPlanner.RELEASE_MS
+                    ),
+                    appliedIds
+            );
+
+            publishAutoLimitStatus(
+                    "VERIFYING",
+                    true,
+                    72,
+                    "Echte LIMIT-Signale werden geprüft …",
+                    peaksDb,
+                    thresholdsDb,
+                    activeIds,
+                    null,
+                    false
+            );
+            activeIds = observeActiveLimiters(new LinkedHashSet<>(targetIds));
+            int clearanceRound = 0;
+            while (true) {
+                while (!activeIds.isEmpty()) {
+                    checkAutoLimitCancelled();
+                    Map<String, Double> raised = AutoLimitPlanner.raiseActiveThresholds(
+                            thresholdsDb,
+                            activeIds
+                    );
+                    List<String> changedIds = new ArrayList<>();
+                    for (String id : raised.keySet()) {
+                        if (!raised.get(id).equals(thresholdsDb.get(id))) {
+                            changedIds.add(id);
+                        }
+                    }
+                    if (changedIds.isEmpty()) {
+                        Map<String, Double> loweredGainsDb = new LinkedHashMap<>();
+                        renewServerAutoLimitLease(leaseToken);
+                        for (String id : activeIds) {
+                            double currentGainDb;
+                            if (adjustedGainsDb.containsKey(id)) {
+                                currentGainDb = adjustedGainsDb.get(id);
+                            } else {
+                                ChannelDto channel = readConfirmedOutputGain(id);
+                                currentGainDb = channel.gainDb();
+                                previousGainsDb.putIfAbsent(id, currentGainDb);
+                            }
+                            double loweredGainDb = Math.max(-60.0, currentGainDb - 1.0);
+                            if (loweredGainDb >= currentGainDb) {
+                                continue;
+                            }
+                            adjustedGainsDb.put(id, loweredGainDb);
+                            loweredGainsDb.put(id, loweredGainDb);
+                        }
+                        if (loweredGainsDb.isEmpty()) {
+                            throw new IllegalStateException(
+                                    "Limiter bleibt trotz minimalem Ausgangs-Gain aktiv (" +
+                                            String.join(", ", activeIds) + ")."
+                            );
+                        }
+                        publishAutoLimitStatus(
+                                "GAIN_CLEARING",
+                                true,
+                                92,
+                                "LIMIT bleibt bei +20 dB aktiv: senke Gain für " +
+                                        String.join(", ", loweredGainsDb.keySet()) + " …",
+                                peaksDb,
+                                thresholdsDb,
+                                activeIds,
+                                null,
+                                false
+                        );
+                        setGainsReliably(loweredGainsDb, appliedGainIds);
+                        activeIds = observeActiveLimiters(new LinkedHashSet<>(targetIds));
+                        continue;
+                    }
+
+                    clearanceRound++;
+                    renewServerAutoLimitLease(leaseToken);
+                    checkAutoLimitCancelled();
+                    publishAutoLimitStatus(
+                            "CLEARING",
+                            true,
+                            Math.min(94, 74 + clearanceRound * 2),
+                            "LIMIT auf " + String.join(", ", changedIds) +
+                                    ": Schwellen gemeinsam erhöhen …",
+                            peaksDb,
+                            raised,
+                            activeIds,
+                            null,
+                            false
+                    );
+                    setLimitersReliably(
+                            limiterSettingsFor(
+                                    changedIds,
+                                    raised,
+                                    AutoLimitPlanner.ATTACK_MS,
+                                    AutoLimitPlanner.RELEASE_MS
+                            ),
+                            appliedIds
+                    );
+                    thresholdsDb = new LinkedHashMap<>(raised);
+                    activeIds = observeActiveLimiters(new LinkedHashSet<>(targetIds));
+                }
+
+                if (!AutoLimitPlanner.ALL_OUTPUTS.equals(targetMode)) {
+                    break;
+                }
+
+                double commonThresholdDb = AutoLimitPlanner.commonThreshold(thresholdsDb);
+                List<String> unsynchronizedIds = new ArrayList<>();
+                for (String id : targetIds) {
+                    if (!thresholdsDb.get(id).equals(commonThresholdDb)) {
+                        unsynchronizedIds.add(id);
+                    }
+                }
+                if (unsynchronizedIds.isEmpty()) {
+                    break;
+                }
+
+                renewServerAutoLimitLease(leaseToken);
+                checkAutoLimitCancelled();
+                publishAutoLimitStatus(
+                        "SYNCHRONIZING",
+                        true,
+                        95,
+                        "Setze gemeinsame Grenze " + commonThresholdDb + " dB auf " +
+                                String.join(", ", unsynchronizedIds) + " …",
+                        peaksDb,
+                        thresholdsDb,
+                        activeIds,
+                        null,
+                        false
+                );
+                Map<String, Double> synchronizedThresholds = new LinkedHashMap<>();
+                unsynchronizedIds.forEach(id -> synchronizedThresholds.put(id, commonThresholdDb));
+                setLimitersReliably(
+                        limiterSettingsFor(
+                                unsynchronizedIds,
+                                synchronizedThresholds,
+                                AutoLimitPlanner.ATTACK_MS,
+                                AutoLimitPlanner.RELEASE_MS
+                        ),
+                        appliedIds
+                );
+                for (String id : unsynchronizedIds) {
+                    thresholdsDb.put(id, commonThresholdDb);
+                }
+                activeIds = observeActiveLimiters(new LinkedHashSet<>(targetIds));
+            }
+
+            if (AutoLimitPlanner.ALL_OUTPUTS.equals(targetMode)) {
+                double knownFreeThresholdDb =
+                        AutoLimitPlanner.commonThreshold(thresholdsDb);
+                Double activeProbeThresholdDb = null;
+                for (int tighteningRound = 1;
+                     tighteningRound <= AUTO_LIMIT_TIGHTENING_MAX_ROUNDS;
+                     tighteningRound++) {
+                    checkAutoLimitCancelled();
+                    double probeThresholdDb =
+                            AutoLimitPlanner.lowerCoarseProbeThreshold(knownFreeThresholdDb);
+                    if (probeThresholdDb >= knownFreeThresholdDb) {
+                        break;
+                    }
+
+                    Map<String, Double> probeThresholds =
+                            commonThresholds(targetIds, probeThresholdDb);
+                    renewServerAutoLimitLease(leaseToken);
+                    publishAutoLimitStatus(
+                            "TIGHTENING",
+                            true,
+                            96,
+                            "Suche erstes LIMIT-Flackern bei " + probeThresholdDb + " dB …",
+                            peaksDb,
+                            probeThresholds,
+                            activeIds,
+                            null,
+                            false
+                    );
+                    setLimitersReliably(
+                            limiterSettingsFor(
+                                    targetIds,
+                                    probeThresholds,
+                                    AutoLimitPlanner.ATTACK_MS,
+                                    AutoLimitPlanner.RELEASE_MS
+                            ),
+                            appliedIds
+                    );
+                    thresholdsDb = new LinkedHashMap<>(probeThresholds);
+                    activeIds = observeLimiterFlicker(new LinkedHashSet<>(targetIds));
+                    if (activeIds.isEmpty()) {
+                        knownFreeThresholdDb = probeThresholdDb;
+                        continue;
+                    }
+                    activeProbeThresholdDb = probeThresholdDb;
+                    break;
+                }
+
+                if (activeProbeThresholdDb != null) {
+                    while (knownFreeThresholdDb - activeProbeThresholdDb
+                            > AutoLimitPlanner.TIGHTENING_STEP_DB) {
+                        checkAutoLimitCancelled();
+                        double fineProbeThresholdDb = AutoLimitPlanner.midpointThreshold(
+                                activeProbeThresholdDb,
+                                knownFreeThresholdDb
+                        );
+                        if (fineProbeThresholdDb <= activeProbeThresholdDb
+                                || fineProbeThresholdDb >= knownFreeThresholdDb) {
+                            break;
+                        }
+                        Map<String, Double> fineProbeThresholds =
+                                commonThresholds(targetIds, fineProbeThresholdDb);
+                        renewServerAutoLimitLease(leaseToken);
+                        publishAutoLimitStatus(
+                                "TIGHTENING",
+                                true,
+                                97,
+                                "Feinsuche nach erstem LIMIT-Flackern bei " +
+                                        fineProbeThresholdDb + " dB …",
+                                peaksDb,
+                                fineProbeThresholds,
+                                activeIds,
+                                null,
+                                false
+                        );
+                        setLimitersReliably(
+                                limiterSettingsFor(
+                                        targetIds,
+                                        fineProbeThresholds,
+                                        AutoLimitPlanner.ATTACK_MS,
+                                        AutoLimitPlanner.RELEASE_MS
+                                ),
+                                appliedIds
+                        );
+                        thresholdsDb = new LinkedHashMap<>(fineProbeThresholds);
+                        activeIds = observeLimiterFlicker(
+                                new LinkedHashSet<>(targetIds)
+                        );
+                        if (activeIds.isEmpty()) {
+                            knownFreeThresholdDb = fineProbeThresholdDb;
+                        } else {
+                            activeProbeThresholdDb = fineProbeThresholdDb;
+                        }
+                    }
+
+                    double finalThresholdDb = Math.max(
+                            knownFreeThresholdDb,
+                            AutoLimitPlanner.freeThresholdAboveActiveProbe(
+                                    activeProbeThresholdDb,
+                                    initialStatus.headroomDb()
+                            )
+                    );
+                    while (true) {
+                        checkAutoLimitCancelled();
+                        Map<String, Double> finalThresholds =
+                                commonThresholds(targetIds, finalThresholdDb);
+                        renewServerAutoLimitLease(leaseToken);
+                        publishAutoLimitStatus(
+                                "SECURING",
+                                true,
+                                98,
+                                "Setze schnelle Grenze " + finalThresholdDb +
+                                        " dB mit " + initialStatus.headroomDb() +
+                                        " dB Reserve …",
+                                peaksDb,
+                                finalThresholds,
+                                activeIds,
+                                null,
+                                false
+                        );
+                        setLimitersReliably(
+                                limiterSettingsFor(
+                                        targetIds,
+                                        finalThresholds,
+                                        AutoLimitPlanner.ATTACK_MS,
+                                        AutoLimitPlanner.RELEASE_MS
+                                ),
+                                appliedIds
+                        );
+                        thresholdsDb = new LinkedHashMap<>(finalThresholds);
+                        activeIds = observeLimiterFlicker(
+                                new LinkedHashSet<>(targetIds)
+                        );
+                        if (activeIds.isEmpty()) {
+                            break;
+                        }
+
+                        double raisedThresholdDb =
+                                AutoLimitPlanner.freeThresholdAboveActiveProbe(
+                                        finalThresholdDb,
+                                        0.0
+                                );
+                        if (raisedThresholdDb <= finalThresholdDb) {
+                            throw new IllegalStateException(
+                                    "Limiter bleibt an der maximalen Einsatzgrenze aktiv."
+                            );
+                        }
+                        finalThresholdDb = raisedThresholdDb;
+                    }
+                }
+            }
+
+            autoLimitUndoSnapshot = new AutoLimitUndoSnapshot(
+                    jobId,
+                    System.currentTimeMillis(),
+                    previousById,
+                    previousGainsDb
+            );
+            publishAutoLimitStatus(
+                    "COMPLETED",
+                    false,
+                    100,
+                    adjustedGainsDb.isEmpty()
+                            ? "Auto-Limit abgeschlossen: LIMIT beim Referenzpegel frei."
+                            : "Auto-Limit abgeschlossen: LIMIT frei; Gain angepasst: " +
+                                    adjustedGainsDb,
+                    peaksDb,
+                    thresholdsDb,
+                    Set.of(),
+                    System.currentTimeMillis(),
+                    false
+            );
+            LOG.info("Server Auto-Limit {} completed: {}", jobId, thresholdsDb);
+        } catch (Exception error) {
+            boolean cancelled = autoLimitCancelRequested || error instanceof InterruptedException;
+            Thread.interrupted();
+            if (!appliedIds.isEmpty() || !appliedGainIds.isEmpty()) {
+                publishAutoLimitStatus(
+                        "ROLLING_BACK",
+                        true,
+                        autoLimitStatus.progressPercent(),
+                        "Vorherige Limiterwerte werden wiederhergestellt …",
+                        peaksDb,
+                        thresholdsDb,
+                        activeIds,
+                        null,
+                        false
+                );
+                boolean limitersRestored = appliedIds.isEmpty()
+                        || restoreLimiters(previousById, appliedIds, leaseToken);
+                boolean gainsRestored = appliedGainIds.isEmpty()
+                        || restoreOutputGains(previousGainsDb, appliedGainIds);
+                rollbackPerformed = limitersRestored && gainsRestored;
+            }
+            String message = cancelled
+                    ? "Auto-Limit abgebrochen; vorherige Werte wurden wiederhergestellt."
+                    : "Auto-Limit fehlgeschlagen: " + safeMessage(error);
+            publishAutoLimitStatus(
+                    cancelled ? "CANCELLED" : "FAILED",
+                    false,
+                    autoLimitStatus.progressPercent(),
+                    message,
+                    peaksDb,
+                    thresholdsDb,
+                    activeIds,
+                    System.currentTimeMillis(),
+                    rollbackPerformed
+            );
+            if (cancelled) {
+                LOG.info("Server Auto-Limit {} cancelled", jobId);
+            } else {
+                LOG.warn("Server Auto-Limit {} failed", jobId, error);
+            }
+        } finally {
+            releaseAutoLimitLease(leaseToken);
+            synchronized (this) {
+                autoLimitFuture = null;
+                autoLimitCancelRequested = false;
+            }
+        }
+    }
+
+    private void runAutoLimitUndo(
+            String jobId,
+            AutoLimitUndoSnapshot snapshot,
+            String leaseToken
+    ) {
+        try {
+            publishAutoLimitStatus(
+                    "UNDOING_LIMITERS",
+                    true,
+                    10,
+                    "Stelle die acht Limiterwerte vor Auto-Limit wieder her …",
+                    Map.of(),
+                    snapshot.thresholdsDb(),
+                    Set.of(),
+                    null,
+                    false
+            );
+            boolean restored = restoreAutoLimitSnapshot(snapshot, leaseToken);
+            if (!restored) {
+                throw new IllegalStateException(
+                        "Nicht alle vorherigen Limiter- und Gain-Werte konnten wiederhergestellt werden."
+                );
+            }
+            synchronized (this) {
+                if (autoLimitUndoSnapshot == snapshot) {
+                    autoLimitUndoSnapshot = null;
+                }
+            }
+            publishAutoLimitStatus(
+                    "UNDONE",
+                    false,
+                    100,
+                    "Auto-Limit wurde rückgängig gemacht; vorherige Limiter- und Gain-Werte sind aktiv.",
+                    Map.of(),
+                    snapshot.thresholdsDb(),
+                    Set.of(),
+                    System.currentTimeMillis(),
+                    true
+            );
+            LOG.info("Server Auto-Limit undo {} restored snapshot from {}", jobId, snapshot.sourceJobId());
+        } catch (Exception error) {
+            Thread.interrupted();
+            publishAutoLimitStatus(
+                    "UNDO_FAILED",
+                    false,
+                    autoLimitStatus.progressPercent(),
+                    "Auto-Limit rückgängig fehlgeschlagen: " + safeMessage(error),
+                    Map.of(),
+                    snapshot.thresholdsDb(),
+                    Set.of(),
+                    System.currentTimeMillis(),
+                    false
+            );
+            LOG.warn("Server Auto-Limit undo {} failed", jobId, error);
+        } finally {
+            releaseAutoLimitLease(leaseToken);
+            synchronized (this) {
+                autoLimitFuture = null;
+                autoLimitCancelRequested = false;
+            }
+        }
+    }
+
+    private MeterStateDto awaitFreshAutoLimitMeters(long newerThanEpochMs) throws InterruptedException {
+        long deadlineEpochMs = System.currentTimeMillis() + 15_000L;
+        while (true) {
+            checkAutoLimitCancelled();
+            MeterStateDto meters = getMeters();
+            Long observedAtEpochMs = meters.observedAtEpochMs();
+            if (meters.rawPayloadConfirmedFromDevice()
+                    && observedAtEpochMs != null
+                    && observedAtEpochMs > newerThanEpochMs
+                    && System.currentTimeMillis() - observedAtEpochMs <= 3_000L) {
+                return meters;
+            }
+            if (System.currentTimeMillis() >= deadlineEpochMs) {
+                throw new IllegalStateException("Keine frischen DSP-Meterdaten verfügbar.");
+            }
+            Thread.sleep(250L);
+        }
+    }
+
+    private List<LimiterDto> readConfirmedAutoLimiters() throws Exception {
+        publishAutoLimitStatus(
+                "INITIALIZING",
+                true,
+                0,
+                "Limiterwerte werden aus dem Server-Cache vorbereitet …",
+                Map.of(),
+                Map.of(),
+                Set.of(),
+                null,
+                false
+        );
+        if (!settingsCacheStatus.ready()) {
+            throw new IllegalStateException(
+                    "DSP-Einstellungscache ist nicht vollständig ("
+                            + settingsCacheStatus.cachedBlockCount() + "/"
+                            + settingsCacheStatus.expectedBlockCount()
+                            + "). Zuerst /refresh ausführen."
+            );
+        }
+
+        List<LimiterDto> limiters = sortedLimiters();
+        List<String> missingIds = limiters.stream()
+                .filter(limiter -> !isConfirmedLimiterSnapshot(limiter))
+                .map(LimiterDto::id)
+                .toList();
+        if (!missingIds.isEmpty()) {
+            throw new IllegalStateException(
+                    "Dekodierte Limiterwerte fehlen im Cache für "
+                            + String.join(", ", missingIds) + "."
+            );
+        }
+
+        for (LimiterDto limiter : limiters) {
+            confirmedLimiterKnees.put(
+                    DspChannel.parse(limiter.id()),
+                    (int) Math.round(limiter.kneeDb())
+            );
+        }
+        return limiters;
+    }
+
+    private List<LimiterDto> sortedLimiters() {
+        return getLimiters().stream()
+                .sorted((left, right) -> Integer.compare(left.index(), right.index()))
+                .toList();
+    }
+
+    private boolean isConfirmedLimiterSnapshot(LimiterDto limiter) {
+        return limiter.thresholdDb() != null
+                && limiter.attackMs() != null
+                && limiter.releaseMs() != null
+                && limiter.kneeDb() != null
+                && limiter.thresholdConfirmedFromDevice()
+                && limiter.attackConfirmedFromDevice()
+                && limiter.releaseConfirmedFromDevice()
+                && limiter.kneeConfirmedFromDevice();
+    }
+
+    private ChannelDto readConfirmedOutputGain(String outputId) throws Exception {
+        ChannelDto channel = getChannel(outputId);
+        if (channel.gainDb() != null && channel.gainConfirmedFromDevice()) {
+            return channel;
+        }
+        String block = outputGainBlock(outputId);
+        for (int attempt = 1; attempt <= 12; attempt++) {
+            checkAutoLimitCancelled();
+            readBlock(block);
+            channel = getChannel(outputId);
+            if (channel.gainDb() != null && channel.gainConfirmedFromDevice()) {
+                return channel;
+            }
+        }
+        throw new IllegalStateException("Ausgangs-Gain fehlt für " + outputId + ".");
+    }
+
+    private String outputGainBlock(String outputId) {
+        return switch (outputId) {
+            case "out1" -> "0D";
+            case "out2" -> "0F";
+            case "out3" -> "11";
+            case "out4" -> "13";
+            case "out5" -> "16";
+            case "out6" -> "18";
+            case "out7" -> "1A";
+            case "out8" -> "1C";
+            default -> throw new IllegalArgumentException("Unknown output: " + outputId);
+        };
+    }
+
+    private void rejectInputClipping(MeterStateDto meters) {
+        List<String> clippingInputs = meters.channels().stream()
+                .filter(meter -> meter.id().startsWith("in"))
+                .filter(MeterDto::clipThresholdConfirmed)
+                .filter(meter -> Boolean.TRUE.equals(meter.clipActive()))
+                .map(MeterDto::id)
+                .toList();
+        if (!clippingInputs.isEmpty()) {
+            throw new IllegalStateException(
+                    "Input-Clipping erkannt (" + String.join(", ", clippingInputs) +
+                            "). Eingangspegel reduzieren."
+            );
+        }
+    }
+
+    private Set<String> observeActiveLimiters(Set<String> targetIds) throws InterruptedException {
+        return observeActiveLimiters(targetIds, false);
+    }
+
+    private Set<String> observeLimiterFlicker(Set<String> targetIds)
+            throws InterruptedException {
+        return observeActiveLimiters(targetIds, true);
+    }
+
+    private Set<String> observeActiveLimiters(
+            Set<String> targetIds,
+            boolean returnOnFirstFlicker
+    ) throws InterruptedException {
+        LinkedHashSet<String> activeIds = new LinkedHashSet<>();
+        LinkedHashSet<String> confirmedIds = new LinkedHashSet<>();
+        long lastObservationEpochMs = System.currentTimeMillis();
+        for (int sample = 0; sample < 5; sample++) {
+            checkAutoLimitCancelled();
+            Thread.sleep(sample == 0 ? 900L : 650L);
+            MeterStateDto meters = awaitFreshAutoLimitMeters(lastObservationEpochMs);
+            lastObservationEpochMs = meters.observedAtEpochMs();
+            rejectInputClipping(meters);
+            for (MeterDto meter : meters.channels()) {
+                if (!targetIds.contains(meter.id()) || !meter.limiterConfirmedFromDevice()) {
+                    continue;
+                }
+                confirmedIds.add(meter.id());
+                if (Boolean.TRUE.equals(meter.limiterActive())) {
+                    activeIds.add(meter.id());
+                }
+            }
+            if (returnOnFirstFlicker
+                    && !activeIds.isEmpty()
+                    && confirmedIds.containsAll(targetIds)) {
+                return activeIds;
+            }
+        }
+        LinkedHashSet<String> missingIds = new LinkedHashSet<>(targetIds);
+        missingIds.removeAll(confirmedIds);
+        if (!missingIds.isEmpty()) {
+            throw new IllegalStateException(
+                    "LIMIT-Rückmeldung fehlt für " + String.join(", ", missingIds) + "."
+            );
+        }
+        return activeIds;
+    }
+
+    private synchronized boolean restoreLimiters(
+            Map<String, LimiterSettings> previousById,
+            Set<String> appliedIds,
+            String leaseToken
+    ) {
+        boolean[] restoredAll = {true};
+        renewAutoLimitLease(leaseToken, AUTO_LIMIT_LEASE_MAX_MS);
+        List<String> reverseIds = new ArrayList<>(appliedIds);
+        java.util.Collections.reverse(reverseIds);
+        rememberConfirmedLimiterKnees();
+        try {
+            withMeterPollingPaused(() -> {
+                for (String id : reverseIds) {
+                    LimiterSettings previous = previousById.get(id);
+                    if (previous == null) {
+                        restoredAll[0] = false;
+                        continue;
+                    }
+                    try {
+                        DspChannel output = DspChannel.parse(id);
+                        writeAutoLimitLimiter(output, previous);
+                    } catch (Exception restoreError) {
+                        restoredAll[0] = false;
+                        LOG.warn("Could not restore limiter {}", id, restoreError);
+                    }
+                }
+                return null;
+            });
+        } catch (Exception transactionError) {
+            restoredAll[0] = false;
+            LOG.warn("Could not complete limiter rollback transaction", transactionError);
+        }
+        return restoredAll[0];
+    }
+
+    private synchronized boolean restoreAutoLimitSnapshot(
+            AutoLimitUndoSnapshot snapshot,
+            String leaseToken
+    ) {
+        LinkedHashSet<String> limiterIds = new LinkedHashSet<>(snapshot.limitersById().keySet());
+        LinkedHashSet<String> gainIds = new LinkedHashSet<>(snapshot.outputGainsDb().keySet());
+        boolean limitersRestored = restoreLimiters(
+                snapshot.limitersById(),
+                limiterIds,
+                leaseToken
+        );
+        boolean gainsRestored = gainIds.isEmpty()
+                || restoreOutputGains(snapshot.outputGainsDb(), gainIds);
+        return limitersRestored && gainsRestored;
+    }
+
+    private synchronized boolean restoreOutputGains(
+            Map<String, Double> previousGainsDb,
+            Set<String> appliedGainIds
+    ) {
+        boolean[] restoredAll = {true};
+        List<String> reverseIds = new ArrayList<>(appliedGainIds);
+        java.util.Collections.reverse(reverseIds);
+        try {
+            withMeterPollingPaused(() -> {
+                for (String id : reverseIds) {
+                    Double previousGainDb = previousGainsDb.get(id);
+                    if (previousGainDb == null) {
+                        restoredAll[0] = false;
+                        continue;
+                    }
+                    try {
+                        writeGainAndUpdateCache(
+                                DspChannel.parse(id),
+                                previousGainDb,
+                                "auto-limit rollback gain tx repeated"
+                        );
+                    } catch (Exception restoreError) {
+                        restoredAll[0] = false;
+                        LOG.warn("Could not restore output gain {}", id, restoreError);
+                    }
+                }
+                return null;
+            });
+        } catch (Exception transactionError) {
+            restoredAll[0] = false;
+            LOG.warn("Could not complete output-gain rollback transaction", transactionError);
+        }
+        return restoredAll[0];
+    }
+
+    private Map<String, LimiterSettings> limiterSettingsFor(
+            List<String> outputIds,
+            Map<String, Double> thresholdsDb,
+            double attackMs,
+            double releaseMs
+    ) {
+        Map<String, LimiterSettings> settings = new LinkedHashMap<>();
+        for (String id : outputIds) {
+            settings.put(id, new LimiterSettings(thresholdsDb.get(id), attackMs, releaseMs));
+        }
+        return settings;
+    }
+
+    private Map<String, Double> commonThresholds(
+            List<String> outputIds,
+            double thresholdDb
+    ) {
+        Map<String, Double> thresholds = new LinkedHashMap<>();
+        outputIds.forEach(id -> thresholds.put(id, thresholdDb));
+        return thresholds;
+    }
+
+    private synchronized void setLimitersReliably(
+            Map<String, LimiterSettings> settingsById,
+            Set<String> appliedIds
+    ) throws Exception {
+        rememberConfirmedLimiterKnees();
+        withMeterPollingPaused(() -> {
+            for (Map.Entry<String, LimiterSettings> entry : settingsById.entrySet()) {
+                checkAutoLimitCancelled();
+                LimiterSettings settings = entry.getValue();
+                /*
+                 * FIR408 acknowledges parameter writes reliably, but block-read
+                 * replies can be suppressed for several seconds. The core sends
+                 * every Auto-Limit write twice with pacing. Runtime LIMIT bits
+                 * then provide the closed-loop verification that matters.
+                 */
+                writeAutoLimitLimiter(DspChannel.parse(entry.getKey()), settings);
+                appliedIds.add(entry.getKey());
+            }
+            return null;
+        });
+    }
+
+    private void writeAutoLimitLimiter(
+            DspChannel output,
+            LimiterSettings settings
+    ) throws Exception {
+        writeLimiterAndUpdateCache(output, settings, "auto-limit tx repeated");
+    }
+
+    private int writeLimiterAndUpdateCache(
+            DspChannel output,
+            LimiterSettings settings,
+            String source
+    ) throws Exception {
+        int attackRaw = DspCodecRegistry.dynamicsTimeMsToRaw(
+                settings.attackMs(),
+                1.0,
+                999.0
+        );
+        int releaseRaw = DspCodecRegistry.dynamicsTimeMsToRaw(
+                settings.releaseMs(),
+                10.0,
+                3000.0
+        );
+        int thresholdRaw = DspCodecRegistry.dynamicsThresholdDbToRaw(
+                settings.thresholdDb(),
+                -90.0,
+                20.0
+        );
+        int kneeRaw = resolveCachedLimiterKnee(output);
+        byte[] payload = DspProtocol.buildLimiter(
+                output,
+                attackRaw,
+                releaseRaw,
+                kneeRaw,
+                thresholdRaw
+        );
+        for (int attempt = 1; attempt <= CACHED_WRITE_REPEATS; attempt++) {
+            controller.sendRaw(payload);
+            if (attempt < CACHED_WRITE_REPEATS) {
+                Thread.sleep(CACHED_WRITE_REPEAT_DELAY_MS);
+            }
+        }
+        controller.state().markLimiter(
+                output,
+                DspCodecRegistry.rawToDynamicsTimeMs(attackRaw),
+                DspCodecRegistry.rawToDynamicsTimeMs(releaseRaw),
+                kneeRaw,
+                DspCodecRegistry.rawToDynamicsThresholdDb(thresholdRaw),
+                source
+        );
+        Fir408WriteVerifier.LimiterLocation location =
+                Fir408WriteVerifier.limiterLocation(output);
+        controller.state().patchCachedBlockUInt16LE(
+                location.blockIndex(), location.attackOffset(), attackRaw);
+        controller.state().patchCachedBlockUInt16LE(
+                location.blockIndex(), location.releaseOffset(), releaseRaw);
+        controller.state().patchCachedBlockUInt16LE(
+                location.blockIndex(), location.kneeOffset(), kneeRaw);
+        controller.state().patchCachedBlockUInt16LE(
+                location.blockIndex(), location.thresholdOffset(), thresholdRaw);
+        confirmedLimiterKnees.put(output, kneeRaw);
+        return kneeRaw;
+    }
+
+    private void writeGainAndUpdateCache(
+            DspChannel channel,
+            double requestedDb,
+            String source
+    ) throws Exception {
+        int gainRaw = DspCodecRegistry.gain().doubleToRaw(requestedDb);
+        double normalizedDb = DspCodecRegistry.gain().rawToDouble(gainRaw);
+        byte[] payload = DspProtocol.buildGain(channel.index(), normalizedDb);
+        for (int attempt = 1; attempt <= CACHED_WRITE_REPEATS; attempt++) {
+            controller.sendRaw(payload);
+            if (attempt < CACHED_WRITE_REPEATS) {
+                Thread.sleep(CACHED_WRITE_REPEAT_DELAY_MS);
+            }
+        }
+        controller.state().markGain(channel, normalizedDb, source);
+        Fir408WriteVerifier.GainLocation location = Fir408WriteVerifier.gainLocation(channel);
+        controller.state().patchCachedBlockUInt16LE(
+                location.blockIndex(), location.dataOffset(), gainRaw);
+    }
+
+    private synchronized void setGainsReliably(
+            Map<String, Double> gainsDb,
+            Set<String> appliedGainIds
+    ) throws Exception {
+        withMeterPollingPaused(() -> {
+            for (Map.Entry<String, Double> entry : gainsDb.entrySet()) {
+                checkAutoLimitCancelled();
+                DspChannel output = DspChannel.parse(entry.getKey());
+                writeGainAndUpdateCache(output, entry.getValue(), "auto-limit gain tx repeated");
+                appliedGainIds.add(entry.getKey());
+            }
+            return null;
+        });
+    }
+
+    private void renewServerAutoLimitLease(String leaseToken) {
+        AutoLimitLeaseDto renewed = renewAutoLimitLease(leaseToken, AUTO_LIMIT_LEASE_MAX_MS);
+        if (!renewed.acquired()) {
+            throw new IllegalStateException("Server Auto-Limit lease was lost.");
+        }
+    }
+
+    private void checkAutoLimitCancelled() throws InterruptedException {
+        if (autoLimitCancelRequested || Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Auto-Limit cancellation requested.");
+        }
+    }
+
+    private synchronized void publishAutoLimitStatus(
+            String phase,
+            boolean running,
+            int progressPercent,
+            String message,
+            Map<String, Double> measuredPeaksDb,
+            Map<String, Double> appliedThresholdsDb,
+            Set<String> activeLimiterIds,
+            Long finishedAtEpochMs,
+            boolean rollbackPerformed
+    ) {
+        AutoLimitStatusDto previous = autoLimitStatus;
+        autoLimitStatus = withCurrentAutoLimitUndo(new AutoLimitStatusDto(
+                previous.jobId(),
+                phase,
+                running,
+                progressPercent,
+                previous.targetMode(),
+                previous.headroomDb(),
+                previous.measurementMs(),
+                message,
+                measuredPeaksDb,
+                appliedThresholdsDb,
+                activeLimiterIds.stream().sorted().toList(),
+                previous.startedAtEpochMs(),
+                finishedAtEpochMs,
+                rollbackPerformed,
+                false,
+                null,
+                null
+        ));
+    }
+
+    private AutoLimitStatusDto withCurrentAutoLimitUndo(AutoLimitStatusDto status) {
+        AutoLimitUndoSnapshot snapshot = autoLimitUndoSnapshot;
+        return new AutoLimitStatusDto(
+                status.jobId(),
+                status.phase(),
+                status.running(),
+                status.progressPercent(),
+                status.targetMode(),
+                status.headroomDb(),
+                status.measurementMs(),
+                status.message(),
+                status.measuredPeaksDb(),
+                status.appliedThresholdsDb(),
+                status.activeLimiterIds(),
+                status.startedAtEpochMs(),
+                status.finishedAtEpochMs(),
+                status.rollbackPerformed(),
+                snapshot != null && !status.running(),
+                snapshot == null ? null : snapshot.sourceJobId(),
+                snapshot == null ? null : snapshot.createdAtEpochMs()
+        );
+    }
+
+    private static String safeMessage(Exception error) {
+        String message = error.getMessage();
+        return message == null || message.isBlank()
+                ? error.getClass().getSimpleName()
+                : message;
+    }
+
+    private <T> T withMeterPollingPaused(CheckedSupplier<T> action) throws Exception {
+        synchronized (confirmedWriteLock) {
+            DspTrafficSnapshot before = controller.trafficSnapshot();
+            boolean resumeMeterPolling = before.centralMeterPolling();
+            if (resumeMeterPolling) {
+                controller.stopMeterPolling();
+                Thread.sleep(CONTROL_QUIET_MS);
+            }
+
+            try {
+                return action.get();
+            } finally {
+                if (resumeMeterPolling && controller.isConnected()) {
+                    startCentralMeterPolling();
+                }
+            }
+        }
+    }
+
+    private int resolveCachedLimiterKnee(DspChannel output) {
+        LimiterState state = controller.state().limiter(output);
+        if (state != null && state.kneeDb() != null
+                && state.kneeDb() >= 0.0 && state.kneeDb() <= 12.0) {
+            int kneeRaw = (int) Math.round(state.kneeDb());
+            confirmedLimiterKnees.put(output, kneeRaw);
+            return kneeRaw;
+        }
+
+        Integer rememberedKneeRaw = confirmedLimiterKnees.get(output);
+        if (rememberedKneeRaw != null) {
+            return rememberedKneeRaw;
+        }
+        throw new IllegalStateException(
+                "Limiter-Knee für " + output.displayName()
+                        + " fehlt im Server-Cache. Zuerst /refresh ausführen."
+        );
+    }
+
+    private void rememberConfirmedLimiterKnees() {
+        for (DspChannel channel : DspChannel.values()) {
+            if (channel.index() < DspChannel.OUT_1.index()) {
+                continue;
+            }
+            LimiterState state = controller.state().limiter(channel);
+            if (state == null || state.kneeDb() == null
+                    || !state.kneeConfirmedFromDevice()
+                    || state.kneeDb() < 0.0 || state.kneeDb() > 12.0) {
+                continue;
+            }
+            confirmedLimiterKnees.put(channel, (int) Math.round(state.kneeDb()));
+        }
+    }
+
+    private SettingsCacheDto synchronizeSettingsCache(String reason) throws Exception {
+        return withMeterPollingPaused(() -> synchronizeSettingsCacheWithMetersStopped(reason));
+    }
+
+    private SettingsCacheDto synchronizeSettingsCacheWithMetersStopped(String reason) throws Exception {
+        int maxBlockIndex = controller.maxParameterBlockIndex();
+        int expectedBlockCount = maxBlockIndex + 1;
+        long generation = ++settingsCacheGeneration;
+        long startedAtEpochMs = System.currentTimeMillis();
+        controller.state().clearCachedBlocks();
+
+        settingsCacheStatus = new SettingsCacheDto(
+                "SYNCHRONIZING",
+                false,
+                expectedBlockCount,
+                0,
+                allBlockIndices(maxBlockIndex),
+                startedAtEpochMs,
+                null,
+                generation,
+                "Reading the complete DSP settings dump (" + reason + ")."
+        );
+
+        Exception dumpFailure = null;
+        List<Integer> missing = missingCachedBlocks(maxBlockIndex);
+        long deadlineEpochMs = startedAtEpochMs + SETTINGS_SYNC_TIMEOUT_MS;
+        for (int pass = 1;
+             pass <= SETTINGS_SYNC_MAX_DUMP_PASSES
+                     && !missing.isEmpty()
+                     && controller.isConnected()
+                     && System.currentTimeMillis() < deadlineEpochMs;
+             pass++) {
+            /*
+             * The FIR408 silently drops block requests when another request
+             * follows before its answer has been consumed. Read each missing
+             * block synchronously and retry it before advancing.
+             */
+            for (int blockIndex : List.copyOf(missing)) {
+                if (System.currentTimeMillis() >= deadlineEpochMs) {
+                    break;
+                }
+                try {
+                    awaitFreshParameterBlock(
+                            blockIndex,
+                            SETTINGS_SYNC_BLOCK_ATTEMPTS_PER_PASS
+                    );
+                } catch (Exception error) {
+                    dumpFailure = error;
+                    LOG.warn(
+                            "DSP settings dump pass {}/{} block {} failed: {}",
+                            pass,
+                            SETTINGS_SYNC_MAX_DUMP_PASSES,
+                            formatIndexHex(blockIndex),
+                            safeMessage(error)
+                    );
+                }
+            }
+            Thread.sleep(SETTINGS_SYNC_SETTLE_MS);
+            missing = missingCachedBlocks(maxBlockIndex);
+            settingsCacheStatus = new SettingsCacheDto(
+                    "SYNCHRONIZING",
+                    false,
+                    expectedBlockCount,
+                    expectedBlockCount - missing.size(),
+                    missing.stream().map(this::formatIndexHex).toList(),
+                    startedAtEpochMs,
+                    null,
+                    generation,
+                    "Reading DSP settings dump; pass " + pass + "/"
+                            + SETTINGS_SYNC_MAX_DUMP_PASSES + "."
+            );
+        }
+
+        boolean ready = missing.isEmpty();
+        int cachedBlockCount = expectedBlockCount - missing.size();
+        long completedAtEpochMs = System.currentTimeMillis();
+        String message;
+        if (ready) {
+            message = "Complete DSP settings dump is cached; settings reads are RAM-only.";
+            rememberConfirmedLimiterKnees();
+        } else {
+            String suffix = dumpFailure == null
+                    ? ""
+                    : " Last pass: " + safeMessage(dumpFailure);
+            message = "DSP settings cache is incomplete (" + cachedBlockCount + "/"
+                    + expectedBlockCount + " blocks)." + suffix;
+        }
+
+        settingsCacheStatus = new SettingsCacheDto(
+                ready ? "READY" : "DEGRADED",
+                ready,
+                expectedBlockCount,
+                cachedBlockCount,
+                missing.stream().map(this::formatIndexHex).toList(),
+                startedAtEpochMs,
+                completedAtEpochMs,
+                generation,
+                message
+        );
+        return settingsCacheStatus;
+    }
+
+    private void promoteCompleteSettingsCache() {
+        SettingsCacheDto previous = settingsCacheStatus;
+        if (previous.ready()
+                || (!"DEGRADED".equals(previous.phase())
+                && !"SYNCHRONIZING".equals(previous.phase()))) {
+            return;
+        }
+
+        int maxBlockIndex = controller.maxParameterBlockIndex();
+        List<Integer> missing = missingCachedBlocks(maxBlockIndex);
+        if (!missing.isEmpty()) {
+            return;
+        }
+
+        rememberConfirmedLimiterKnees();
+        settingsCacheStatus = new SettingsCacheDto(
+                "READY",
+                true,
+                maxBlockIndex + 1,
+                maxBlockIndex + 1,
+                List.of(),
+                previous.startedAtEpochMs(),
+                System.currentTimeMillis(),
+                previous.generation(),
+                "Complete DSP settings dump is cached; settings reads are RAM-only."
+        );
+    }
+
+    private List<Integer> missingCachedBlocks(int maxBlockIndex) {
+        List<Integer> missing = new ArrayList<>();
+        for (int blockIndex = 0; blockIndex <= maxBlockIndex; blockIndex++) {
+            if (controller.state().getBlock(blockIndex) == null) {
+                missing.add(blockIndex);
+            }
+        }
+        return missing;
+    }
+
+    private List<String> allBlockIndices(int maxBlockIndex) {
+        List<String> indices = new ArrayList<>();
+        for (int blockIndex = 0; blockIndex <= maxBlockIndex; blockIndex++) {
+            indices.add(formatIndexHex(blockIndex));
+        }
+        return List.copyOf(indices);
+    }
+
+    private void markSettingsCacheDisconnected() {
+        SettingsCacheDto previous = settingsCacheStatus;
+        settingsCacheStatus = new SettingsCacheDto(
+                "DISCONNECTED",
+                false,
+                previous.expectedBlockCount(),
+                controller.state().cachedBlockIndices().size(),
+                previous.missingBlockIndices(),
+                previous.startedAtEpochMs(),
+                previous.completedAtEpochMs(),
+                previous.generation(),
+                "DSP disconnected; the last settings snapshot is retained but not live."
+        );
+    }
+
+    private void markSettingsCacheStale(String message) {
+        SettingsCacheDto previous = settingsCacheStatus;
+        settingsCacheStatus = new SettingsCacheDto(
+                "STALE",
+                false,
+                previous.expectedBlockCount(),
+                controller.state().cachedBlockIndices().size(),
+                previous.missingBlockIndices(),
+                previous.startedAtEpochMs(),
+                previous.completedAtEpochMs(),
+                previous.generation(),
+                message
+        );
+    }
+
+    private byte[] awaitFreshParameterBlock(int blockIndex) throws Exception {
+        return awaitFreshParameterBlock(blockIndex, BLOCK_READ_REQUEST_ATTEMPTS);
+    }
+
+    private byte[] awaitFreshParameterBlock(int blockIndex, int requestAttempts) throws Exception {
+        long previousRevision = controller.state().blockRevision(blockIndex);
+        int attempts = Math.max(1, requestAttempts);
+        for (int requestAttempt = 1; requestAttempt <= attempts; requestAttempt++) {
+            if (controller.state().blockRevision(blockIndex) > previousRevision) {
+                byte[] alreadyReceived = controller.state().getBlock(blockIndex);
+                if (alreadyReceived != null) {
+                    return alreadyReceived;
+                }
+            }
+
+            controller.readParameterBlock(blockIndex);
+            long deadlineEpochMs = System.currentTimeMillis() + BLOCK_RESPONSE_TIMEOUT_MS;
+            while (System.currentTimeMillis() < deadlineEpochMs) {
+                if (controller.state().blockRevision(blockIndex) > previousRevision) {
+                    byte[] data = controller.state().getBlock(blockIndex);
+                    if (data != null) {
+                        return data;
+                    }
+                }
+                Thread.sleep(BLOCK_RESPONSE_POLL_MS);
+            }
+        }
+        throw new IllegalStateException(
+                String.format(Locale.ROOT, "Keine frische DSP-Antwort für Block %02X.", blockIndex)
+        );
+    }
+
+    private static String decodeCurrentPresetName(byte[] blockZero) {
+        if (blockZero == null || blockZero.length <= 2) {
+            return null;
+        }
+        int end = Math.min(blockZero.length, 16);
+        while (end > 2 && (blockZero[end - 1] == 0x00 || blockZero[end - 1] == 0x20)) {
+            end--;
+        }
+        String value = new String(blockZero, 2, end - 2, StandardCharsets.US_ASCII);
+        return value.isBlank() ? null : value;
+    }
+
+    private static String decodePresetNamePayload(byte[] payload) {
+        int end = payload.length;
+        while (end > 4 && payload[end - 1] == 0x20) {
+            end--;
+        }
+        return new String(payload, 4, end - 4, StandardCharsets.US_ASCII);
+    }
+
+    @FunctionalInterface
+    private interface CheckedSupplier<T> {
+        T get() throws Exception;
+    }
+
+    private record LimiterSettings(double thresholdDb, double attackMs, double releaseMs) {
+    }
+
+    private record AutoLimitUndoSnapshot(
+            String sourceJobId,
+            long createdAtEpochMs,
+            Map<String, LimiterSettings> limitersById,
+            Map<String, Double> outputGainsDb
+    ) {
+        private AutoLimitUndoSnapshot {
+            limitersById = Map.copyOf(new LinkedHashMap<>(limitersById));
+            outputGainsDb = Map.copyOf(new LinkedHashMap<>(outputGainsDb));
+        }
+
+        private Map<String, Double> thresholdsDb() {
+            Map<String, Double> thresholds = new LinkedHashMap<>();
+            limitersById.forEach((id, settings) -> thresholds.put(id, settings.thresholdDb()));
+            return Map.copyOf(thresholds);
+        }
+    }
+
     private DspConnectionConfig currentConfig() {
         Dsp408Configuration cfg = configuration;
         if (cfg == null) {
             return DspConnectionConfig.defaultConfig("192.168.0.166", 9761);
         }
         return DspConnectionConfig.defaultConfig(cfg.dsp_ip(), cfg.dsp_port());
+    }
+
+    private void startCentralMeterPolling() {
+        Dsp408Configuration cfg = configuration;
+        long intervalMs = cfg == null ? 200L : cfg.meter_poll_interval_ms();
+        controller.startMeterPolling(Math.max(200L, intervalMs));
+    }
+
+    private synchronized void startConnectionWatchdog() {
+        ScheduledExecutorService existing = connectionWatchdogExecutor;
+        if (existing != null && !existing.isShutdown()) {
+            return;
+        }
+        connectionWatchdogExecutor = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "dsp408-reconnect-" + instanceId);
+            thread.setDaemon(true);
+            return thread;
+        });
+        connectionWatchdogExecutor.scheduleWithFixedDelay(
+                this::connectionWatchdogTick,
+                CONNECTION_WATCHDOG_INTERVAL_MS,
+                CONNECTION_WATCHDOG_INTERVAL_MS,
+                TimeUnit.MILLISECONDS
+        );
+    }
+
+    private synchronized void stopConnectionWatchdog() {
+        ScheduledExecutorService executor = connectionWatchdogExecutor;
+        connectionWatchdogExecutor = null;
+        if (executor != null) {
+            executor.shutdownNow();
+        }
+    }
+
+    private void connectionWatchdogTick() {
+        try {
+            detectOrRepairLostConnection();
+        } catch (Exception error) {
+            LOG.warn("DSP408 {} connection watchdog failed: {}", instanceId, safeMessage(error));
+        }
+    }
+
+    private synchronized void detectOrRepairLostConnection() {
+        if (!reconnectDesired || reconnectAttemptRunning) {
+            return;
+        }
+        if (controller.isConnected()) {
+            reconnectSchedule.recordSuccess();
+            return;
+        }
+
+        long nowEpochMs = System.currentTimeMillis();
+        if (!reconnectSchedule.isArmed()) {
+            reconnectSchedule.arm(nowEpochMs);
+            markSettingsCacheDisconnected();
+            LOG.warn(
+                    "DSP408 {} connection lost; automatic reconnect scheduled in {} ms",
+                    instanceId,
+                    DSP_RECONNECT_INITIAL_DELAY_MS
+            );
+            return;
+        }
+        if (!reconnectSchedule.isDue(nowEpochMs)) {
+            return;
+        }
+
+        reconnectAttemptRunning = true;
+        try {
+            LOG.info("DSP408 {} automatic reconnect starts", instanceId);
+            controller.close();
+            String message = connectNow();
+            reconnectSchedule.recordSuccess();
+            LOG.info("DSP408 {} automatic reconnect succeeded: {}", instanceId, message);
+        } catch (Exception error) {
+            controller.close();
+            markSettingsCacheDisconnected();
+            long retryInMs = reconnectSchedule.recordFailure(System.currentTimeMillis());
+            LOG.warn(
+                    "DSP408 {} automatic reconnect failed; next retry in {} ms: {}",
+                    instanceId,
+                    retryInMs,
+                    safeMessage(error)
+            );
+        } finally {
+            reconnectAttemptRunning = false;
+        }
+    }
+
+    private long normalizeAutoLimitTtl(long ttlMs) {
+        long requested = ttlMs <= 0L ? AUTO_LIMIT_LEASE_DEFAULT_MS : ttlMs;
+        return Math.max(AUTO_LIMIT_LEASE_MIN_MS, Math.min(AUTO_LIMIT_LEASE_MAX_MS, requested));
+    }
+
+    private void clearExpiredAutoLimitLease() {
+        if (autoLimitLeaseToken != null
+                && System.currentTimeMillis() >= autoLimitLeaseExpiresAtEpochMs) {
+            clearAutoLimitLease();
+        }
+    }
+
+    private void clearAutoLimitLease() {
+        autoLimitLeaseOwner = null;
+        autoLimitLeaseToken = null;
+        autoLimitLeaseExpiresAtEpochMs = 0L;
+    }
+
+    private boolean ownsAutoLimitLeaseInternal(String token) {
+        return autoLimitLeaseToken != null
+                && token != null
+                && autoLimitLeaseToken.equals(token.trim());
+    }
+
+    private AutoLimitLeaseDto autoLimitLeaseDto(boolean acquired, String message) {
+        boolean active = autoLimitLeaseToken != null;
+        return new AutoLimitLeaseDto(
+                active,
+                acquired,
+                autoLimitLeaseOwner,
+                acquired ? autoLimitLeaseToken : null,
+                active ? autoLimitLeaseExpiresAtEpochMs : null,
+                message == null
+                        ? (active ? "Auto-Limit is running." : "Auto-Limit is available.")
+                        : message
+        );
     }
 
     double currentVolumeStepDb() {
@@ -854,10 +2774,104 @@ public final class DspRuntimeComponent implements DspService {
                 toDeviceInfoDto(),
                 getChannels(),
                 getCachedBlockIndices(),
+                toMatrixOutputDtos(),
+                toPeqChannelDtos(),
                 toInputGateDtos(),
                 toInputCompressorDtos(),
                 toLimiterDtos(),
                 toMeterStateDto()
+        );
+    }
+
+    private List<MatrixOutputDto> toMatrixOutputDtos() {
+        return List.of(
+                DspChannel.OUT_1, DspChannel.OUT_2, DspChannel.OUT_3, DspChannel.OUT_4,
+                DspChannel.OUT_5, DspChannel.OUT_6, DspChannel.OUT_7, DspChannel.OUT_8
+        ).stream()
+                .map(channel -> toMatrixOutputDto(controller.state().matrixOutput(channel)))
+                .toList();
+    }
+
+    private List<PeqChannelDto> toPeqChannelDtos() {
+        return List.of(
+                DspChannel.IN_A, DspChannel.IN_B, DspChannel.IN_C, DspChannel.IN_D,
+                DspChannel.OUT_1, DspChannel.OUT_2, DspChannel.OUT_3, DspChannel.OUT_4,
+                DspChannel.OUT_5, DspChannel.OUT_6, DspChannel.OUT_7, DspChannel.OUT_8
+        ).stream().map(this::toPeqChannelDto).toList();
+    }
+
+    private PeqChannelDto toPeqChannelDto(DspChannel channel) {
+        boolean input = channel.index() <= DspChannel.IN_D.index();
+        int bandCount = input ? 8 : 9;
+        List<PeqBandDto> bands = new ArrayList<>(bandCount);
+        for (int bandIndex = 1; bandIndex <= bandCount; bandIndex++) {
+            PeqBandState band = input
+                    ? controller.state().inputPeq(channel).band(bandIndex)
+                    : controller.state().outputPeq(channel).band(bandIndex);
+            bands.add(toPeqBandDto(bandIndex, band));
+        }
+        return new PeqChannelDto(
+                toChannelId(channel),
+                channel.displayName(),
+                channel.index(),
+                input,
+                bandCount,
+                bands
+        );
+    }
+
+    private static PeqBandDto toPeqBandDto(int bandIndex, PeqBandState band) {
+        if (band == null) {
+            return new PeqBandDto(
+                    bandIndex, null, null, null, null, null,
+                    false, false, false, false, false,
+                    null, null, null, null, null
+            );
+        }
+        return new PeqBandDto(
+                bandIndex,
+                band.gainDb(),
+                band.frequencyHz(),
+                band.q(),
+                band.filterType() == null ? null : band.filterType().displayName(),
+                band.bypass(),
+                band.gainConfirmedFromDevice(),
+                band.frequencyConfirmedFromDevice(),
+                band.qConfirmedFromDevice(),
+                band.typeConfirmedFromDevice(),
+                band.bypassConfirmedFromDevice(),
+                band.lastGainUpdateSource(),
+                band.lastFrequencyUpdateSource(),
+                band.lastQUpdateSource(),
+                band.lastTypeUpdateSource(),
+                band.lastBypassUpdateSource()
+        );
+    }
+
+    private MatrixOutputDto toMatrixOutputDto(MatrixOutputState matrix) {
+        DspChannel output = matrix.output();
+        List<String> routedInputIds = matrix.routedInputsSnapshot().stream()
+                .sorted(java.util.Comparator.comparingInt(DspChannel::index))
+                .map(this::toChannelId)
+                .toList();
+        List<MatrixCrosspointDto> crosspoints = List.of(
+                DspChannel.IN_A, DspChannel.IN_B, DspChannel.IN_C, DspChannel.IN_D
+        ).stream()
+                .map(input -> new MatrixCrosspointDto(
+                        toChannelId(input),
+                        input.displayName(),
+                        input.index(),
+                        matrix.crosspointGain(input),
+                        matrix.crosspointGainConfirmedFromDevice(input),
+                        matrix.crosspointGainUpdateSource(input)
+                ))
+                .toList();
+        return new MatrixOutputDto(
+                toChannelId(output),
+                output.displayName(),
+                output.index(),
+                routedInputIds,
+                crosspoints
         );
     }
 
@@ -964,13 +2978,25 @@ public final class DspRuntimeComponent implements DspService {
 
     private MeterStateDto toMeterStateDto() {
         MeterState meterState = controller.state().meterState();
+        byte[] rawPayload = meterState.lastRuntimePayload();
+        List<Integer> tailBytes = new ArrayList<>();
+        if (rawPayload != null) {
+            for (int offset = 40; offset < rawPayload.length; offset++) {
+                tailBytes.add(rawPayload[offset] & 0xFF);
+            }
+        }
         return new MeterStateDto(
                 meterState.allChannels().stream()
                         .map(this::toMeterDto)
                         .toList(),
                 meterState.statusByteRaw(),
                 meterState.statusConfirmedFromDevice(),
-                meterState.lastStatusUpdateSource()
+                meterState.lastStatusUpdateSource(),
+                rawPayload == null ? null : Hex.format(rawPayload),
+                tailBytes,
+                meterState.lastRuntimePayloadObservedAtEpochMs(),
+                meterState.runtimePayloadConfirmedFromDevice(),
+                meterState.lastRuntimePayloadUpdateSource()
         );
     }
 
@@ -992,16 +3018,20 @@ public final class DspRuntimeComponent implements DspService {
                 meter.rawLowByte(),
                 meter.rawHighByte(),
                 rawValue,
-                rawValue == null ? null : MeterLevelDecoder.decodeDb(rawValue),
+                rawValue == null ? null : MeterLevelDecoder.decodeDb(rawValue, meter.slotByte2()),
                 meter.slotByte2(),
                 limiter == null ? null : limiter.runtimeActive(),
+                meter.clipActive(),
                 meter.confirmedFromDevice(),
                 limiter != null && limiter.runtimeConfirmedFromDevice(),
+                meter.clipDerivedFromDeviceMeter(),
+                controller.meterClipThresholdConfirmed(channel),
                 controller.meterChannelMappingConfirmed(),
                 controller.meterLevelCalibrationConfirmed(),
                 limiter != null && controller.meterLimiterMappingConfirmed(),
                 meter.lastUpdateSource(),
-                limiter == null ? null : limiter.lastRuntimeUpdateSource()
+                limiter == null ? null : limiter.lastRuntimeUpdateSource(),
+                meter.lastClipUpdateSource()
         );
     }
 
@@ -1065,23 +3095,6 @@ public final class DspRuntimeComponent implements DspService {
         };
     }
 
-    private Integer gainBlockIndex(DspChannel channel) {
-        return switch (channel) {
-            case IN_A -> 0x02;
-            case IN_B -> 0x05;
-            case IN_C -> 0x08;
-            case IN_D -> 0x0B;
-            case OUT_1 -> 0x0D;
-            case OUT_2 -> 0x0F;
-            case OUT_3 -> 0x11;
-            case OUT_4 -> 0x13;
-            case OUT_5 -> 0x15;
-            case OUT_6 -> 0x17;
-            case OUT_7 -> 0x19;
-            case OUT_8 -> 0x1C;
-        };
-    }
-
     private static int outputNumber(DspChannel channel) {
         return channel.index() - 3;
     }
@@ -1115,7 +3128,8 @@ public final class DspRuntimeComponent implements DspService {
                 || band.gainDb() == null
                 || band.frequencyHz() == null
                 || band.q() == null
-                || band.filterType() == null) {
+                || band.filterType() == null
+                || band.bypass() == null) {
             throw new IllegalStateException("Output PEQ state is incomplete for " + channel.displayName() + " PEQ" + peqIndex);
         }
 
@@ -1125,7 +3139,8 @@ public final class DspRuntimeComponent implements DspService {
                 band.gainDb(),
                 band.frequencyHz(),
                 band.q(),
-                band.filterType()
+                band.filterType(),
+                band.bypass()
         );
         return buildRawTxDto(payload);
     }
@@ -1151,11 +3166,6 @@ public final class DspRuntimeComponent implements DspService {
                 band.bypass()
         );
         return buildRawTxDto(payload);
-    }
-
-    private void readBlockWithWait(int blockIndex) throws Exception {
-        controller.readParameterBlock(blockIndex);
-        Thread.sleep(500);
     }
 
     private String executeWithCapture(DspCommandProcessor template, String line, boolean isAdmin) {
@@ -1202,8 +3212,10 @@ public final class DspRuntimeComponent implements DspService {
                     definition.id(),
                     definition.ip(),
                     definition.port(),
+                    configuration.dsp_library(),
                     configuration.auto_connect(),
                     configuration.auto_read_on_connect(),
+                    configuration.meter_poll_interval_ms(),
                     configuration.volume_step_db(),
                     new String[0]
             ));
@@ -1273,7 +3285,8 @@ public final class DspRuntimeComponent implements DspService {
 
     private static boolean connectionChanged(Dsp408Configuration oldCfg, Dsp408Configuration newCfg) {
         return !oldCfg.dsp_ip().equals(newCfg.dsp_ip())
-                || oldCfg.dsp_port() != newCfg.dsp_port();
+                || oldCfg.dsp_port() != newCfg.dsp_port()
+                || !oldCfg.dsp_library().equalsIgnoreCase(newCfg.dsp_library());
     }
 
     private record DspDefinition(String id, String ip, int port) {
@@ -1282,8 +3295,10 @@ public final class DspRuntimeComponent implements DspService {
     private record StaticDsp408Configuration(String dspId,
                                              String dspIp,
                                              int dspPort,
+                                             String dspLibrary,
                                              boolean autoConnect,
                                              boolean autoReadOnConnect,
+                                             long meterPollIntervalMs,
                                              double volumeStepDb,
                                              String[] dsps) implements Dsp408Configuration {
         @Override
@@ -1302,6 +3317,11 @@ public final class DspRuntimeComponent implements DspService {
         }
 
         @Override
+        public String dsp_library() {
+            return dspLibrary;
+        }
+
+        @Override
         public boolean auto_connect() {
             return autoConnect;
         }
@@ -1309,6 +3329,11 @@ public final class DspRuntimeComponent implements DspService {
         @Override
         public boolean auto_read_on_connect() {
             return autoReadOnConnect;
+        }
+
+        @Override
+        public long meter_poll_interval_ms() {
+            return meterPollIntervalMs;
         }
 
         @Override

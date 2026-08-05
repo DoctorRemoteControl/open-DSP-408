@@ -17,7 +17,11 @@ This bundle contains the stable service contract used by the other bundles. It d
 
 - `DspService` - main control/query interface.
 - `DspInstanceDto` - configured DSP instance summary for multi-DSP setups.
-- `StateDto` - current connection, device and channel summary.
+- `StateDto` - current connection, device, channel, full 8x4 matrix and all 104 PEQ bands.
+- `MatrixOutputDto` / `MatrixCrosspointDto` - routed inputs plus all four
+  decoded crosspoint gains per output, including device-confirmation metadata.
+- `PeqChannelDto` / `PeqBandDto` - every input/output PEQ value, bypass flag,
+  per-field device confirmation and update source.
 - `ChannelDto` - currently exposed per-channel state.
 - `InputGateDto` - input-gate values with independent device-confirmation and
   update-source fields for threshold, hold, attack and release.
@@ -42,7 +46,8 @@ This bundle contains the stable service contract used by the other bundles. It d
 - preset load and preset-name read
 - matrix routing and crosspoint gain
 - crossover high-pass and low-pass
-- output PEQ, input PEQ and input GEQ
+- output PEQ (including state-preserving bypass), input PEQ and input GEQ
+- preflighted all-PEQ bypass for all 104 FIR408 bands
 - input gate, FIR408 input compressor and output limiter
 - test tone generator
 - FIR408 processing mode, FIR generator and external FIR upload

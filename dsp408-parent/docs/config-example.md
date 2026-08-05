@@ -38,8 +38,10 @@ An underscore `_` becomes a dot `.`.
 dsp_id()                  -> dsp.id
 dsp_ip()                  -> dsp.ip
 dsp_port()                -> dsp.port
+dsp_library()             -> dsp.library
 auto_connect()            -> auto.connect
 auto_read_on_connect()    -> auto.read.on.connect
+meter_poll_interval_ms()  -> meter.poll.interval.ms
 volume_step_db()          -> volume.step.db
 dsps()                    -> dsps
 ```
@@ -79,8 +81,10 @@ config:edit de.drremote.dsp408controller
 config:property-set dsp.id main
 config:property-set dsp.ip 192.168.50.166
 config:property-set dsp.port 9761
+config:property-set dsp.library fir408
 config:property-set auto.connect true
 config:property-set auto.read.on.connect true
+config:property-set meter.poll.interval.ms 200
 config:property-set volume.step.db 1.0
 config:update
 ```
@@ -90,8 +94,10 @@ config:update
 `dsp.id` is the id of the default DSP used by the old single-DSP API and shell commands.
 `dsp.ip` is the IP address of the default DSP.
 `dsp.port` is the TCP port of the DSP.
+`dsp.library` selects `fir408`, `dsp408` or automatic device-version detection before the startup dump.
 `auto.connect` automatically connects to the DSP when the component is activated.
-`auto.read.on.connect` automatically reads the parameter blocks after connecting.
+`auto.read.on.connect` is retained for compatibility; every connection now performs a verified full dump.
+`meter.poll.interval.ms` controls the single central DSP meter poller. API clients read its cache.
 `volume.step.db` is the step size for `louder` and `quieter` in the volume room.
 `dsps` contains optional additional DSPs as `id=ip` or `id=ip:port`.
 
@@ -169,7 +175,8 @@ config:update
 `access.token` is the access token of the bot account.
 `control.room.id` is the room for `!dsp ...` commands.
 `admin.room.id` is a deprecated fallback for `control.room.id`.
-`volume.room.id` is the room for volume commands like `louder`, `quieter`, or `set -10`.
+`volume.room.id` is the room for simple commands such as `in +`, `out -`, `ina -20`, or `out1 mute`.
+`warning.room.id` is the read-only room for confirmed limiter warnings and the commands `warnungen an`, `warnungen aus`, and `status`.
 `machine.room.id` is the room for machine JSON commands.
 `allowed.users` contains all users allowed to use the bot.
 `admin.users` contains the users with extended permissions.

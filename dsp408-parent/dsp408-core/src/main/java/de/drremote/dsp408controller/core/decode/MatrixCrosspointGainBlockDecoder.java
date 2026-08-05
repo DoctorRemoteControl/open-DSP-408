@@ -40,7 +40,18 @@ public final class MatrixCrosspointGainBlockDecoder implements BlockDecoder {
             double decoded = DspCodecRegistry.gain().rawToDouble(raw);
             double db = Math.max(-60.0, Math.min(0.0, decoded));
 
-            state.markMatrixCrosspointGain(location.output(), location.input(), db);
+            state.markMatrixCrosspointGainFromDevice(
+                    location.output(),
+                    location.input(),
+                    db,
+                    String.format(
+                            Locale.ROOT,
+                            "block:%02X@%02X raw=%d",
+                            blockIndex,
+                            location.dataOffset(),
+                            raw
+                    )
+            );
 
             if (log != null) {
                 log.accept(String.format(

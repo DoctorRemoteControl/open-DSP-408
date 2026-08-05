@@ -11,7 +11,7 @@ Matrix bot integration for DSP408/FIR408 control.
 
 ## Purpose
 
-This bundle lets Matrix rooms control DSP408 and FIR408 devices. It supports human-readable `!dsp ...` commands in a control room, a restricted volume room and structured machine events for service-to-service control.
+This bundle lets Matrix rooms control and monitor DSP408 and FIR408 devices. It supports human-readable `!dsp ...` commands in a control room, a restricted volume room, a read-only limiter warning room and structured machine events for service-to-service control.
 
 ## Main Classes
 
@@ -33,13 +33,17 @@ This bundle lets Matrix rooms control DSP408 and FIR408 devices. It supports hum
 - `access.token` - access token for the bot account.
 - `control.room.id` - room for full `!dsp` control.
 - `admin.room.id` - deprecated fallback for `control.room.id`.
-- `volume.room.id` - room for `!dsp volume ...` commands.
+- `volume.room.id` - room for simple grouped and individual level commands.
+- `warning.room.id` - read-only room for limiter warnings.
 - `machine.room.id` - room for structured machine events.
 - `allowed.users` - users allowed to issue normal commands.
 - `admin.users` - users allowed to issue admin commands.
 - `machine.users` - users allowed to send machine events.
 - `sync.timeout.ms` - Matrix sync timeout.
 - `reconnect.delay.ms` - delay after Matrix errors.
+- `limiter.warnings.enabled` - default warning state when no room state exists.
+- `limiter.warning.poll.ms` - live-meter polling interval, minimum 500 ms.
+- `limiter.warning.cooldown.ms` - reminder interval, minimum 5000 ms.
 - `connect.dsp.on.start` - connect the DSP during bot startup.
 
 The Java configuration methods use underscores, for example `control_room_id()`. In Karaf configuration those names are written with dots, for example `control.room.id`.
@@ -63,6 +67,8 @@ Examples:
 !dsp xgain out1 inb -12
 !dsp xhpset out1 80 LR_24 on
 !dsp opeqfreq out1 1 1000
+!dsp opeqbypass out1 1 on
+!dsp peqallbypass on
 !dsp firmode out1 fir
 !dsp firgen out1 lowpass hamming 0 120 512
 !dsp tone 1000
@@ -85,6 +91,64 @@ The old commands target the default DSP. To address a specific configured DSP, w
 !dsp dsp fir408 firmode out1 fir
 !dsp dsp normal408 route out1 ina
 ```
+
+## Simple Volume Room
+
+The dedicated volume room also accepts short commands without a `!dsp` prefix.
+Unknown chat messages are ignored. `+` and `-` use the configured
+`volume.step.db` value, which defaults to 1 dB.
+
+```text
+lauter
+leiser
+in +
+in -
+out +
+out -
+ina -20
+inb +
+out1 -10
+out5 -
+in mute
+out unmute
+out1 mute
+status
+help
+```
+
+`lauter` and `leiser` address all inputs together. They are short aliases for
+`in +` and `in -`.
+
+`in` controls InA through InD as a group and preserves their relative gain
+offsets when `+` or `-` is used. `out` does the same for Out1 through Out8.
+A fixed group value is deliberately explicit:
+
+```text
+in set -20
+out set -20
+```
+
+The previous `!dsp volume ...` syntax remains supported.
+
+## Limiter Warning Room
+
+The warning room never forwards commands to the DSP. It reads the confirmed
+runtime limiter flags for Out1 through Out8 and sends a short warning on a new
+activation. A limiter that remains active produces a reminder after the
+configured cooldown. When all affected outputs are free again, the room gets
+an all-clear message.
+
+Allowed room commands:
+
+```text
+warnungen an
+warnungen aus
+status
+help
+```
+
+The on/off state is saved as Matrix room state and therefore survives Karaf
+and Matrix bot restarts. Other chat and all `!dsp` commands are ignored.
 
 ## Machine Events
 

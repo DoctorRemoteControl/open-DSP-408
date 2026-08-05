@@ -76,6 +76,8 @@ import de.drremote.dsp408.api.DspService;
                 "osgi.command.function=opeqgain",
                 "osgi.command.function=opeqgcode",
                 "osgi.command.function=opeqtype",
+                "osgi.command.function=opeqbypass",
+                "osgi.command.function=peqallbypass",
                 "osgi.command.function=peqf",
                 "osgi.command.function=peqqraw",
                 "osgi.command.function=peqgcode",
@@ -184,8 +186,8 @@ public final class Dsp408Command {
                   dsp408:deviceinfo
                   dsp408:info
                   dsp408:login <1234>
-                  dsp408:loadpreset <F00|U01..U20>
-                  dsp408:loadpreset <0..20>
+                  dsp408:loadpreset <F00|U01..U19>
+                  dsp408:loadpreset <0..19>
                   dsp408:readpresetname <0..19>
                   dsp408:meters                  (read DSP now)
                   dsp408:meterstate              (cached meters)
@@ -416,7 +418,7 @@ public final class Dsp408Command {
     }
 
     public Object loadpreset(String... args) throws Exception {
-        requireArgs(args, 1, "Usage: dsp408:loadpreset <F00|U01..U20|0..20>");
+        requireArgs(args, 1, "Usage: dsp408:loadpreset <F00|U01..U19|0..19>");
         if (args[0].matches("\\d+")) {
             return service.loadPreset(Integer.parseInt(args[0]));
         }
@@ -582,6 +584,16 @@ public final class Dsp408Command {
     public Object opeqtype(String... args) throws Exception {
         requireArgs(args, 3, "Usage: dsp408:opeqtype <outX> <band> <type>");
         return service.setOutputPeqType(args[0], parseInt(args[1]), args[2]);
+    }
+
+    public Object opeqbypass(String... args) throws Exception {
+        requireArgs(args, 3, "Usage: dsp408:opeqbypass <outX> <band> <on|off>");
+        return service.setOutputPeqBypass(args[0], parseInt(args[1]), parseOnOff(args[2]));
+    }
+
+    public Object peqallbypass(String... args) throws Exception {
+        requireArgs(args, 1, "Usage: dsp408:peqallbypass <on|off>");
+        return service.setAllPeqBypass(parseOnOff(args[0]));
     }
 
     public Object ipeqset(String... args) throws Exception {
@@ -836,7 +848,7 @@ public final class Dsp408Command {
     }
 
     private Object loadPreset(DspService target, String[] args) throws Exception {
-        String slot = requiredArg(args, 0, "Usage: dsp408:dsp <id> loadpreset <F00|U01..U20|0..20>");
+        String slot = requiredArg(args, 0, "Usage: dsp408:dsp <id> loadpreset <F00|U01..U19|0..19>");
         if (slot.matches("\\d+")) {
             return target.loadPreset(Integer.parseInt(slot));
         }

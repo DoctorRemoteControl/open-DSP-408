@@ -30,6 +30,7 @@ public final class MatrixBotComponent {
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     private volatile MatrixRuntimeConfig config;
+    private volatile LimiterWarningMonitor warningMonitor;
     private ExecutorService dspExecutor;
     private Thread syncThread;
 
@@ -97,18 +98,37 @@ public final class MatrixBotComponent {
 
                 String since = api.sync(null, 0).path("next_batch").asText();
 
+                LimiterWarningMonitor monitor = null;
+                if (cfg.warningRoomId != null && !cfg.warningRoomId.isBlank()) {
+                    monitor = new LimiterWarningMonitor(
+                            service,
+                            api,
+                            cfg.warningRoomId,
+                            cfg.limiterWarningsEnabled,
+                            cfg.limiterWarningPollMs,
+                            cfg.limiterWarningCooldownMs,
+                            msg -> LOG.info("[LIMITER] {}", msg)
+                    );
+                    monitor.start();
+                    warningMonitor = monitor;
+                }
+
                 MatrixMessageHandler messageHandler = new MatrixMessageHandler(
                         cfg,
                         service,
                         api,
                         dspExecutor,
                         botUserId,
+                        monitor,
                         msg -> LOG.info("[MATRIX] {}", msg)
                 );
 
                 LOG.info("Matrix bot started. Control room: {}", cfg.controlRoomId);
                 if (cfg.volumeRoomId != null && !cfg.volumeRoomId.isBlank()) {
                     LOG.info("Matrix bot volume room: {}", cfg.volumeRoomId);
+                }
+                if (cfg.warningRoomId != null && !cfg.warningRoomId.isBlank()) {
+                    LOG.info("Matrix bot limiter warning room: {}", cfg.warningRoomId);
                 }
                 if (cfg.machineRoomId != null && !cfg.machineRoomId.isBlank()) {
                     LOG.info("Matrix bot machine room: {}", cfg.machineRoomId);
@@ -126,6 +146,7 @@ public final class MatrixBotComponent {
 
                         messageHandler.handleRoomEvents(joinedRooms, cfg.controlRoomId, "control");
                         messageHandler.handleRoomEvents(joinedRooms, cfg.volumeRoomId, "volume");
+                        messageHandler.handleRoomEvents(joinedRooms, cfg.warningRoomId, "warning");
                         messageHandler.handleRoomEvents(joinedRooms, cfg.machineRoomId, "machine");
 
                     } catch (Exception e) {
@@ -145,6 +166,11 @@ public final class MatrixBotComponent {
                 }
 
             } catch (Exception e) {
+                LimiterWarningMonitor monitor = warningMonitor;
+                if (monitor != null) {
+                    monitor.stop();
+                    warningMonitor = null;
+                }
                 if (!running.get()) {
                     break;
                 }
@@ -163,6 +189,12 @@ public final class MatrixBotComponent {
 
     private synchronized void stop() {
         running.set(false);
+
+        LimiterWarningMonitor monitor = warningMonitor;
+        if (monitor != null) {
+            monitor.stop();
+            warningMonitor = null;
+        }
 
         if (syncThread != null) {
             syncThread.interrupt();

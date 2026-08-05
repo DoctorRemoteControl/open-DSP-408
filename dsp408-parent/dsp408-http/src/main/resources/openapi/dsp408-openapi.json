@@ -38,13 +38,26 @@
     "/api/v1/dsps": {"get": {"tags": ["dsps"], "summary": "List configured DSP instances", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/dsps/{dspId}/state": {"get": {"tags": ["dsps"], "summary": "Get state for a specific DSP instance", "description": "Most single-DSP endpoints can be prefixed with /api/v1/dsps/{dspId}, for example /api/v1/dsps/main/channels/out1/gain.", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/dsps/{dspId}/meters": {"get": {"tags": ["dsps", "meters"], "summary": "Get cached runtime meters for a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/MeterStateResponse"}}}},
-    "/api/v1/dsps/{dspId}/meters/read": {"post": {"tags": ["dsps", "meters"], "summary": "Request and return runtime meters for a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/StateDtoResponse"}}}},
+    "/api/v1/dsps/{dspId}/meters/read": {"post": {"tags": ["dsps", "meters"], "summary": "Legacy cache-only meter endpoint", "description": "The server-owned central poller is the only component that requests fresh DSP meter frames.", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/StateDtoResponse"}}}},
     "/api/v1/dsps/{dspId}/connection/connect": {"post": {"tags": ["dsps"], "summary": "Connect a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/dsps/{dspId}/channels/{channelId}/gain": {"post": {"tags": ["dsps"], "summary": "Set gain on a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}, {"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/dsps/{dspId}/preset/validate": {"post": {"tags": ["dsps", "preset"], "summary": "Validate a JSON preset for a specific DSP without changing hardware", "parameters": [{"$ref": "#/components/parameters/dspId"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetValidationResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/dsps/{dspId}/preset/apply": {"post": {"tags": ["dsps", "preset"], "summary": "Safely apply a JSON preset to a specific DSP", "description": "The document is fully validated before writes. All channels are muted first, and an emergency mute is attempted if an operation fails.", "parameters": [{"$ref": "#/components/parameters/dspId"}, {"$ref": "#/components/parameters/unmuteSelected"}, {"$ref": "#/components/parameters/refreshPreset"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetApplyResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "500": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/state": {"get": {"tags": ["device"], "summary": "Get known DSP state", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/status": {"get": {"tags": ["device"], "summary": "Alias for state", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/traffic": {"get": {"tags": ["debug"], "summary": "Get command queue, central meter poller and ACK retry diagnostics", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/settings-cache": {"get": {"tags": ["device", "blocks"], "summary": "Get server-side DSP settings cache status", "description": "READY means normal settings reads are served completely from RAM without DSP parameter requests.", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/preset/export": {"get": {"tags": ["preset", "blocks"], "summary": "Read all FIR408 parameter blocks and export the complete DSP state as JSON", "description": "The response contains all 32 authoritative raw blocks, their SHA-256 digest, and the decoded controller view. Exact restore is performed with a native U01..U19 DSP slot because FIR408 has no raw block-write command.", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/auto-limit/lock": {
+      "get": {"tags": ["dynamics"], "summary": "Get the current Auto-Limit lease", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}},
+      "post": {"tags": ["dynamics"], "summary": "Acquire the exclusive Auto-Limit lease", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}
+    },
+    "/api/v1/auto-limit/lock/renew": {"post": {"tags": ["dynamics"], "summary": "Renew an Auto-Limit lease", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/auto-limit/lock/release": {"post": {"tags": ["dynamics"], "summary": "Release an Auto-Limit lease", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/auto-limit/status": {"get": {"tags": ["dynamics"], "summary": "Get the server-owned Auto-Limit job status", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/auto-limit/start": {"post": {"tags": ["dynamics"], "summary": "Start an asynchronous server-owned Auto-Limit job", "description": "Body fields: headroomDb, targetMode=ACTIVE_OUTPUTS|ALL_OUTPUTS, measurementMs. The server continues when the client disconnects.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"202": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/auto-limit/cancel": {"post": {"tags": ["dynamics"], "summary": "Cancel the server Auto-Limit job and restore previous limiter values", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/auto-limit/undo": {"post": {"tags": ["dynamics"], "summary": "Restore limiter and output-gain values saved before the last successful Auto-Limit job", "responses": {"202": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/device": {"get": {"tags": ["device"], "summary": "Get device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/deviceinfo": {"get": {"tags": ["device"], "summary": "Alias for device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/info": {"get": {"tags": ["device"], "summary": "Alias for device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
@@ -64,9 +77,12 @@
     "/api/v1/channels/{channelId}/delay": {"post": {"tags": ["channels"], "summary": "Set delay", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/delay-unit": {"post": {"tags": ["channels"], "summary": "Set delay unit", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/preset/load": {"post": {"tags": ["device"], "summary": "Load preset by slot or index", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
+    "/api/v1/preset/store": {"post": {"tags": ["preset", "device"], "summary": "Store the complete active DSP state in native user slot U01..U19", "description": "JSON body: slot and a printable ASCII name of at most 14 characters. The server writes the name, stores the slot and verifies the name by reading it back from the DSP.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/preset/name/read": {"post": {"tags": ["device"], "summary": "Request preset name", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/preset/validate": {"post": {"tags": ["preset"], "summary": "Validate a complete JSON preset without changing the DSP", "description": "Accepts the preset document directly, so files can be posted with curl --data-binary @preset.json.", "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetValidationResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/preset/apply": {"post": {"tags": ["preset"], "summary": "Safely apply a complete JSON preset", "description": "The document is fully validated before writes. All channels are muted first. unmuteAfterApply is only honored when unmuteSelected=true.", "parameters": [{"$ref": "#/components/parameters/unmuteSelected"}, {"$ref": "#/components/parameters/refreshPreset"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetApplyResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "500": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/peq": {"get": {"tags": ["peq"], "summary": "Get all decoded PEQ parameters and bypass states", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/peq/{channelId}": {"get": {"tags": ["peq"], "summary": "Get decoded PEQ state for one input or output", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}": {"post": {"tags": ["peq"], "summary": "Set full output PEQ band", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}/frequency": {"post": {"tags": ["peq"], "summary": "Set output PEQ frequency", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}/q": {"post": {"tags": ["peq"], "summary": "Set output PEQ Q", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
@@ -74,6 +90,8 @@
     "/api/v1/channels/{channelId}/peq/{peqIndex}/gain": {"post": {"tags": ["peq"], "summary": "Set output PEQ gain", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}/gain/code": {"post": {"tags": ["peq"], "summary": "Set output PEQ raw gain code", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}/type": {"post": {"tags": ["peq"], "summary": "Set output PEQ type", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
+    "/api/v1/channels/{channelId}/peq/{peqIndex}/bypass": {"post": {"tags": ["peq"], "summary": "Set output PEQ bypass while preserving gain, frequency, Q and type", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/peq/bypass-all": {"post": {"tags": ["peq"], "summary": "Set bypass on all 104 input and output PEQs", "description": "Preflights the complete cached PEQ state before sending any command, then writes 4x8 input and 8x9 output bands while preserving every stored PEQ parameter.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels/{channelId}/input-peq/{peqIndex}": {"post": {"tags": ["peq"], "summary": "Set full input PEQ band", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels/{channelId}/input-peq/{peqIndex}/{field}": {"post": {"tags": ["peq"], "summary": "Set input PEQ field: frequency, q, gain, type, bypass", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels/{channelId}/geq/{bandIndex}/gain": {"post": {"tags": ["geq"], "summary": "Set input GEQ band gain", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "bandIndex", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 31}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
@@ -84,6 +102,8 @@
     "/api/v1/channels/{channelId}/gate/{field}": {"post": {"tags": ["gate"], "summary": "Set gate field: threshold, hold, attack, release", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels/{channelId}/crossover/{filter}": {"post": {"tags": ["crossover"], "summary": "Set crossover filter hp or lp", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "filter", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/channels/{channelId}/crossover/{filter}/{field}": {"post": {"tags": ["crossover"], "summary": "Set crossover field: frequency, slope, bypass", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "filter", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/matrix": {"get": {"tags": ["matrix"], "summary": "Get all cached matrix routes and crosspoint gains", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/matrix/{outputId}": {"get": {"tags": ["matrix"], "summary": "Get one cached matrix output", "parameters": [{"name": "outputId", "in": "path", "required": true, "schema": {"type": "string", "enum": ["out1", "out2", "out3", "out4", "out5", "out6", "out7", "out8"]}}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/matrix/route": {"post": {"tags": ["matrix"], "summary": "Set complete output route mask", "description": "Body: output plus either input for one source or inputs as an array of zero to four sources.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/matrix/crosspoint-gain": {"post": {"tags": ["matrix"], "summary": "Set matrix crosspoint gain", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/fir/mode": {"post": {"tags": ["fir"], "summary": "FIR408 only: set output processing mode iir or fir", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
@@ -95,17 +115,17 @@
     },
     "/api/v1/channels/{channelId}/limiter": {
       "get": {"tags": ["dynamics"], "summary": "Get cached output limiter state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}},
-      "post": {"tags": ["dynamics"], "summary": "Set output limiter", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}
+      "post": {"tags": ["dynamics"], "summary": "Set output limiter", "description": "While Auto-Limit is active the request body must include its leaseToken.", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}
     },
     "/api/v1/test-tone/source": {"post": {"tags": ["test-tone"], "summary": "Set test tone source", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/test-tone/sine": {"post": {"tags": ["test-tone"], "summary": "Set test tone sine frequency by hz or raw selector", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/test-tone/off": {"post": {"tags": ["test-tone"], "summary": "Disable test tone", "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
     "/api/v1/meters": {"get": {"tags": ["meters"], "summary": "Get cached runtime meters", "responses": {"200": {"$ref": "#/components/responses/MeterStateResponse"}}}},
-    "/api/v1/meters/read": {"post": {"tags": ["meters"], "summary": "Request runtime meters and return the updated DSP state", "responses": {"200": {"$ref": "#/components/responses/StateDtoResponse"}}}},
+    "/api/v1/meters/read": {"post": {"tags": ["meters"], "summary": "Legacy cache-only meter endpoint", "description": "The server-owned central poller is the only component that requests fresh DSP meter frames.", "responses": {"200": {"$ref": "#/components/responses/StateDtoResponse"}}}},
     "/api/v1/blocks": {"get": {"tags": ["blocks"], "summary": "List cached block indices", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/blocks/{blockIndex}": {"get": {"tags": ["blocks"], "summary": "Get cached block", "parameters": [{"$ref": "#/components/parameters/blockIndex"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/blocks/{blockIndex}/read": {"post": {"tags": ["blocks"], "summary": "Read one block", "parameters": [{"$ref": "#/components/parameters/blockIndex"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/blocks/scan": {"post": {"tags": ["blocks"], "summary": "Scan all parameter blocks", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/blocks/scan": {"post": {"tags": ["blocks"], "summary": "Synchronize the complete settings cache", "description": "Stops meter polling, obtains a fresh response for every expected DSP parameter block, decodes the dump, then resumes meter polling.", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/scanblocks": {"post": {"tags": ["blocks"], "summary": "Alias for scan", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/refresh": {"post": {"tags": ["blocks"], "summary": "Alias for scan", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/raw": {"post": {"tags": ["debug"], "summary": "Send raw DSP payload", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}}}},
@@ -335,6 +355,7 @@
         "type": "object",
         "required": [
           "id", "displayName", "index", "levelConfirmedFromDevice", "limiterConfirmedFromDevice",
+          "clipDerivedFromDeviceMeter", "clipThresholdConfirmed",
           "channelMappingConfirmed", "levelCalibrationConfirmed", "limiterMappingConfirmed"
         ],
         "properties": {
@@ -348,25 +369,34 @@
             "type": ["number", "null"],
             "description": "Empirical DSP408/FIR408 meter level. Calibrated with the FIR408 internal 1 kHz sine; values below the observed range are limited to -60 dB."
           },
-          "aux": {"type": ["integer", "null"], "minimum": 0, "maximum": 255, "description": "Unknown third byte of the runtime meter slot."},
+          "aux": {"type": ["integer", "null"], "minimum": 0, "maximum": 255, "description": "Fractional byte of the runtime meter value; retained under the compatibility field name aux."},
           "limiterActive": {"type": ["boolean", "null"], "description": "Runtime limiter flag for Out1..Out8; null for input channels or before the first meter response."},
+          "clipActive": {"type": ["boolean", "null"], "description": "Per-channel clipping state. For physically confirmed FIR408 channels it is true when the slot u16le value is at least the operational threshold 0x3F30, selected inside the physical LED bracket (0x3F2C, 0x3F35]; null means that channel has not yet been independently confirmed."},
           "levelConfirmedFromDevice": {"type": "boolean", "description": "A runtime meter payload was received from the physical DSP. This does not by itself prove the slot-to-channel mapping."},
           "limiterConfirmedFromDevice": {"type": "boolean", "description": "The limiter mask was received from the physical DSP."},
+          "clipDerivedFromDeviceMeter": {"type": "boolean", "description": "clipActive was calculated from a meter slot received from the physical DSP."},
+          "clipThresholdConfirmed": {"type": "boolean", "description": "True only after the slot threshold relation has been independently confirmed against the physical channel CLIP LED. The FIR408 operational boundary is 0x3F30 within the observed bracket (0x3F2C, 0x3F35], currently confirmed for InA and InB."},
           "channelMappingConfirmed": {"type": "boolean", "description": "The slot-to-channel assignment has been independently verified for this library."},
           "levelCalibrationConfirmed": {"type": "boolean", "description": "The raw-to-dB conversion has been calibrated on the physical FIR408."},
           "limiterMappingConfirmed": {"type": "boolean", "description": "The limiter-mask bit mapping is verified for this library."},
           "lastLevelUpdateSource": {"type": ["string", "null"]},
-          "lastLimiterUpdateSource": {"type": ["string", "null"]}
+          "lastLimiterUpdateSource": {"type": ["string", "null"]},
+          "lastClipUpdateSource": {"type": ["string", "null"]}
         }
       },
       "MeterStateDto": {
         "type": "object",
-        "required": ["channels", "statusConfirmedFromDevice"],
+        "required": ["channels", "statusConfirmedFromDevice", "tailBytesRaw", "rawPayloadConfirmedFromDevice"],
         "properties": {
           "channels": {"type": "array", "items": {"$ref": "#/components/schemas/MeterDto"}},
-          "statusByteRaw": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
+          "statusByteRaw": {"type": ["integer", "null"], "minimum": 0, "maximum": 255, "description": "Undecoded runtime status byte at payload offset 40."},
           "statusConfirmedFromDevice": {"type": "boolean"},
-          "lastStatusUpdateSource": {"type": ["string", "null"]}
+          "lastStatusUpdateSource": {"type": ["string", "null"]},
+          "rawPayloadHex": {"type": ["string", "null"], "description": "Most recent complete cmd 0x40 response payload, including the FIR408-specific tail."},
+          "tailBytesRaw": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "description": "Payload bytes from offset 40 through the end of the latest runtime-meter response."},
+          "observedAtEpochMs": {"type": ["integer", "null"], "format": "int64"},
+          "rawPayloadConfirmedFromDevice": {"type": "boolean"},
+          "lastRawPayloadUpdateSource": {"type": ["string", "null"]}
         }
       },
       "MeterStateEnvelope": {
@@ -376,6 +406,21 @@
           "dspId": {"type": "string"},
           "connected": {"type": "boolean"},
           "meters": {"$ref": "#/components/schemas/MeterStateDto"}
+        }
+      },
+      "SettingsCacheDto": {
+        "type": "object",
+        "required": ["phase", "ready", "expectedBlockCount", "cachedBlockCount", "missingBlockIndices", "generation", "message"],
+        "properties": {
+          "phase": {"type": "string", "enum": ["EMPTY", "SYNCHRONIZING", "READY", "DEGRADED", "STALE", "DISCONNECTED"]},
+          "ready": {"type": "boolean"},
+          "expectedBlockCount": {"type": "integer", "minimum": 0},
+          "cachedBlockCount": {"type": "integer", "minimum": 0},
+          "missingBlockIndices": {"type": "array", "items": {"type": "string"}},
+          "startedAtEpochMs": {"type": ["integer", "null"], "format": "int64"},
+          "completedAtEpochMs": {"type": ["integer", "null"], "format": "int64"},
+          "generation": {"type": "integer", "format": "int64", "minimum": 0},
+          "message": {"type": "string"}
         }
       },
       "InputGateDto": {
@@ -449,14 +494,73 @@
           "meter": {"$ref": "#/components/schemas/MeterDto"}
         }
       },
+      "MatrixCrosspointDto": {
+        "type": "object",
+        "required": ["inputId", "displayName", "index", "gainConfirmedFromDevice"],
+        "properties": {
+          "inputId": {"type": "string", "enum": ["ina", "inb", "inc", "ind"]},
+          "displayName": {"type": "string"},
+          "index": {"type": "integer", "minimum": 0, "maximum": 3},
+          "gainDb": {"type": ["number", "null"], "minimum": -60, "maximum": 0},
+          "gainConfirmedFromDevice": {"type": "boolean"},
+          "lastGainUpdateSource": {"type": ["string", "null"]}
+        }
+      },
+      "MatrixOutputDto": {
+        "type": "object",
+        "required": ["id", "displayName", "index", "routedInputIds", "crosspoints"],
+        "properties": {
+          "id": {"type": "string", "enum": ["out1", "out2", "out3", "out4", "out5", "out6", "out7", "out8"]},
+          "displayName": {"type": "string"},
+          "index": {"type": "integer", "minimum": 4, "maximum": 11},
+          "routedInputIds": {"type": "array", "items": {"type": "string", "enum": ["ina", "inb", "inc", "ind"]}},
+          "crosspoints": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "#/components/schemas/MatrixCrosspointDto"}}
+        }
+      },
+      "PeqBandDto": {
+        "type": "object",
+        "required": ["bandIndex", "gainConfirmedFromDevice", "frequencyConfirmedFromDevice", "qConfirmedFromDevice", "typeConfirmedFromDevice", "bypassConfirmedFromDevice"],
+        "properties": {
+          "bandIndex": {"type": "integer", "minimum": 1, "maximum": 9},
+          "gainDb": {"type": ["number", "null"]},
+          "frequencyHz": {"type": ["number", "null"]},
+          "q": {"type": ["number", "null"]},
+          "filterType": {"type": ["string", "null"]},
+          "bypass": {"type": ["boolean", "null"]},
+          "gainConfirmedFromDevice": {"type": "boolean"},
+          "frequencyConfirmedFromDevice": {"type": "boolean"},
+          "qConfirmedFromDevice": {"type": "boolean"},
+          "typeConfirmedFromDevice": {"type": "boolean"},
+          "bypassConfirmedFromDevice": {"type": "boolean"},
+          "lastGainUpdateSource": {"type": ["string", "null"]},
+          "lastFrequencyUpdateSource": {"type": ["string", "null"]},
+          "lastQUpdateSource": {"type": ["string", "null"]},
+          "lastTypeUpdateSource": {"type": ["string", "null"]},
+          "lastBypassUpdateSource": {"type": ["string", "null"]}
+        }
+      },
+      "PeqChannelDto": {
+        "type": "object",
+        "required": ["id", "displayName", "index", "input", "bandCount", "bands"],
+        "properties": {
+          "id": {"type": "string"},
+          "displayName": {"type": "string"},
+          "index": {"type": "integer", "minimum": 0, "maximum": 11},
+          "input": {"type": "boolean"},
+          "bandCount": {"type": "integer", "enum": [8, 9]},
+          "bands": {"type": "array", "items": {"$ref": "#/components/schemas/PeqBandDto"}}
+        }
+      },
       "StateDto": {
         "type": "object",
-        "required": ["connected", "channels", "cachedBlockIndices", "inputGates", "inputCompressors", "limiters", "meters"],
+        "required": ["connected", "channels", "cachedBlockIndices", "matrixOutputs", "peqChannels", "inputGates", "inputCompressors", "limiters", "meters"],
         "properties": {
           "connected": {"type": "boolean"},
           "deviceInfo": {"$ref": "#/components/schemas/Object"},
           "channels": {"type": "array", "items": {"$ref": "#/components/schemas/Object"}},
           "cachedBlockIndices": {"type": "array", "items": {"type": "string"}},
+          "matrixOutputs": {"type": "array", "items": {"$ref": "#/components/schemas/MatrixOutputDto"}},
+          "peqChannels": {"type": "array", "items": {"$ref": "#/components/schemas/PeqChannelDto"}},
           "inputGates": {"type": "array", "items": {"$ref": "#/components/schemas/InputGateDto"}},
           "inputCompressors": {"type": "array", "items": {"$ref": "#/components/schemas/InputCompressorDto"}},
           "limiters": {"type": "array", "items": {"$ref": "#/components/schemas/LimiterDto"}},

@@ -7,9 +7,12 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Deactivate;
 import org.osgi.service.component.annotations.Reference;
-import org.osgi.service.http.whiteboard.HttpWhiteboardConstants;
+import org.osgi.service.http.HttpService;
+import org.osgi.service.http.NamespaceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,18 +21,15 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 
 import de.drremote.dsp408.api.DspService;
 import de.drremote.dsp408.api.InputGateDto;
+import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-@Component(
-        service = javax.servlet.Servlet.class,
-        property = {
-                HttpWhiteboardConstants.HTTP_WHITEBOARD_SERVLET_PATTERN + "=/api/v1/*",
-                HttpWhiteboardConstants.HTTP_WHITEBOARD_CONTEXT_SELECT + "=(osgi.http.whiteboard.context.name=default)"
-        }
-)
+@Component(immediate = true, service = {})
 public final class DspApiServlet extends HttpServlet {
+    static final String HTTP_ALIAS = "/api/v1";
+
     private static final Logger LOG = LoggerFactory.getLogger(DspApiServlet.class);
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -37,6 +37,41 @@ public final class DspApiServlet extends HttpServlet {
 
     @Reference
     private DspService dsp;
+
+    private HttpService httpService;
+    private boolean httpRegistered;
+
+    @Reference
+    void bindHttpService(HttpService service) {
+        httpService = service;
+    }
+
+    void unbindHttpService(HttpService service) {
+        if (httpService == service) {
+            httpService = null;
+        }
+    }
+
+    @Activate
+    void activate() throws ServletException, NamespaceException {
+        httpService.registerServlet(HTTP_ALIAS, this, null, null);
+        httpRegistered = true;
+        LOG.info("DSP408 HTTP API registered at {}", HTTP_ALIAS);
+    }
+
+    @Deactivate
+    void deactivate() {
+        if (!httpRegistered || httpService == null) {
+            return;
+        }
+        try {
+            httpService.unregister(HTTP_ALIAS);
+        } catch (IllegalArgumentException e) {
+            LOG.debug("DSP408 HTTP alias was already unregistered", e);
+        } finally {
+            httpRegistered = false;
+        }
+    }
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
@@ -85,6 +120,31 @@ public final class DspApiServlet extends HttpServlet {
                 return;
             }
 
+            if (path.equals("/traffic") || path.equals("/diagnostics/traffic")) {
+                writeJson(resp, 200, dsp.getTrafficStatus());
+                return;
+            }
+
+            if (path.equals("/settings-cache") || path.equals("/cache/status")) {
+                writeJson(resp, 200, dsp.getSettingsCacheStatus());
+                return;
+            }
+
+            if (path.equals("/preset/export")) {
+                writeJson(resp, 200, dsp.exportPresetSnapshot());
+                return;
+            }
+
+            if (path.equals("/auto-limit/lock")) {
+                writeJson(resp, 200, dsp.getAutoLimitLease());
+                return;
+            }
+
+            if (path.equals("/auto-limit/status")) {
+                writeJson(resp, 200, dsp.getAutoLimitStatus());
+                return;
+            }
+
             if (path.equals("/device") || path.equals("/deviceinfo") || path.equals("/info")) {
                 writeJson(resp, 200, dsp.getDeviceInfo());
                 return;
@@ -113,6 +173,40 @@ public final class DspApiServlet extends HttpServlet {
                 writeJson(resp, 200, Map.of(
                         "connected", dsp.isConnected(),
                         "channels", dsp.getChannels()
+                ));
+                return;
+            }
+
+            if (path.equals("/matrix")) {
+                writeJson(resp, 200, Map.of(
+                        "connected", dsp.isConnected(),
+                        "outputs", dsp.getMatrixOutputs()
+                ));
+                return;
+            }
+
+            if (path.startsWith("/matrix/")) {
+                String outputId = path.substring("/matrix/".length());
+                writeJson(resp, 200, Map.of(
+                        "connected", dsp.isConnected(),
+                        "output", dsp.getMatrixOutput(outputId)
+                ));
+                return;
+            }
+
+            if (path.equals("/peq")) {
+                writeJson(resp, 200, Map.of(
+                        "connected", dsp.isConnected(),
+                        "channels", dsp.getPeqChannels()
+                ));
+                return;
+            }
+
+            if (path.startsWith("/peq/")) {
+                String channelId = path.substring("/peq/".length());
+                writeJson(resp, 200, Map.of(
+                        "connected", dsp.isConnected(),
+                        "channel", dsp.getPeqChannel(channelId)
                 ));
                 return;
             }
@@ -160,6 +254,7 @@ public final class DspApiServlet extends HttpServlet {
             if (path.equals("/blocks")) {
                 writeJson(resp, 200, Map.of(
                         "connected", dsp.isConnected(),
+                        "settingsCache", dsp.getSettingsCacheStatus(),
                         "cachedBlockIndices", dsp.getCachedBlockIndices()
                 ));
                 return;
@@ -187,6 +282,8 @@ public final class DspApiServlet extends HttpServlet {
             sendError(resp, 404, "not_found", "Unknown endpoint.");
         } catch (UnsupportedOperationException e) {
             sendError(resp, 409, "unsupported_operation", e.getMessage());
+        } catch (IllegalStateException e) {
+            sendError(resp, 409, "conflict", e.getMessage());
         } catch (IllegalArgumentException e) {
             sendError(resp, 422, "unprocessable_entity", e.getMessage());
         } catch (Exception e) {
@@ -239,6 +336,15 @@ public final class DspApiServlet extends HttpServlet {
                 return;
             }
 
+            if (path.equals("/preset/store")) {
+                Map<String, Object> body = readJsonBody(req);
+                writeJson(resp, 200, dsp.storePreset(
+                        requireString(body, "slot"),
+                        requireString(body, "name")
+                ));
+                return;
+            }
+
             if (path.equals("/preset/name/read")) {
                 Map<String, Object> body = readJsonBody(req);
                 writeJson(resp, 200, dsp.readPresetName(requireInt(body, "index")));
@@ -268,6 +374,17 @@ public final class DspApiServlet extends HttpServlet {
             if (path.equals("/delay-unit")) {
                 Map<String, Object> body = readJsonBody(req);
                 writeJson(resp, 200, dsp.setDelayUnit(requireString(body, "unit")));
+                return;
+            }
+
+            if (path.equals("/peq/bypass-all")) {
+                Map<String, Object> body = readJsonBody(req);
+                boolean bypass = requireBoolean(body, "bypass");
+                writeJson(resp, 200, Map.of(
+                        "bypass", bypass,
+                        "count", 104,
+                        "writes", dsp.setAllPeqBypass(bypass)
+                ));
                 return;
             }
 
@@ -445,6 +562,10 @@ public final class DspApiServlet extends HttpServlet {
                     writeJson(resp, 200, dsp.setOutputPeqType(channelId, peqIndex, requireString(body, "type")));
                     return;
                 }
+                if ("bypass".equalsIgnoreCase(field)) {
+                    writeJson(resp, 200, dsp.setOutputPeqBypass(channelId, peqIndex, requireBoolean(body, "bypass")));
+                    return;
+                }
             }
 
             if (path.startsWith("/channels/") && path.contains("/peq/") && path.endsWith("/frequency")) {
@@ -589,12 +710,71 @@ public final class DspApiServlet extends HttpServlet {
             if (path.startsWith("/channels/") && path.endsWith("/limiter")) {
                 String channelId = path.substring("/channels/".length(), path.length() - "/limiter".length());
                 Map<String, Object> body = readJsonBody(req);
+                if (dsp.getAutoLimitLease().active()) {
+                    String leaseToken = optionalString(body, "leaseToken");
+                    if (!dsp.ownsAutoLimitLease(leaseToken)) {
+                        sendError(
+                                resp,
+                                409,
+                                "auto_limit_locked",
+                                "Auto-Limit is already running on another client."
+                        );
+                        return;
+                    }
+                }
                 writeJson(resp, 200, dsp.setLimiter(
                         channelId,
                         requireDouble(body, "thresholdDb"),
                         requireDouble(body, "attackMs"),
                         requireDouble(body, "releaseMs")
                 ));
+                return;
+            }
+
+            if (path.equals("/auto-limit/lock")) {
+                Map<String, Object> body = readJsonBody(req);
+                var lease = dsp.acquireAutoLimitLease(
+                        requireString(body, "owner"),
+                        optionalLong(body, "ttlMs", 30_000L)
+                );
+                writeJson(resp, lease.acquired() ? 200 : 409, lease);
+                return;
+            }
+
+            if (path.equals("/auto-limit/start")) {
+                Map<String, Object> body = readJsonBody(req);
+                writeJson(resp, 202, dsp.startAutoLimit(
+                        optionalDouble(body, "headroomDb", 1.0),
+                        optionalString(body, "targetMode"),
+                        optionalLong(body, "measurementMs", 6_000L)
+                ));
+                return;
+            }
+
+            if (path.equals("/auto-limit/cancel")) {
+                writeJson(resp, 200, dsp.cancelAutoLimit());
+                return;
+            }
+
+            if (path.equals("/auto-limit/undo")) {
+                writeJson(resp, 202, dsp.undoAutoLimit());
+                return;
+            }
+
+            if (path.equals("/auto-limit/lock/renew")) {
+                Map<String, Object> body = readJsonBody(req);
+                var lease = dsp.renewAutoLimitLease(
+                        requireString(body, "token"),
+                        optionalLong(body, "ttlMs", 30_000L)
+                );
+                writeJson(resp, lease.acquired() ? 200 : 409, lease);
+                return;
+            }
+
+            if (path.equals("/auto-limit/lock/release")) {
+                Map<String, Object> body = readJsonBody(req);
+                var lease = dsp.releaseAutoLimitLease(requireString(body, "token"));
+                writeJson(resp, lease.acquired() ? 200 : 409, lease);
                 return;
             }
 
@@ -731,6 +911,8 @@ public final class DspApiServlet extends HttpServlet {
             writeJson(resp, e.httpStatus(), e.response(context.dsp().dspId()));
         } catch (UnsupportedOperationException e) {
             sendError(resp, 409, "unsupported_operation", e.getMessage());
+        } catch (IllegalStateException e) {
+            sendError(resp, 409, "conflict", e.getMessage());
         } catch (IllegalArgumentException e) {
             sendError(resp, 422, "unprocessable_entity", e.getMessage());
         } catch (Exception e) {
@@ -756,16 +938,18 @@ public final class DspApiServlet extends HttpServlet {
     }
 
     private Map<String, Object> stateResponse(DspService dsp) {
-        return Map.of(
-                "dspId", dsp.dspId(),
-                "connected", dsp.isConnected(),
-                "deviceInfo", dsp.getDeviceInfo(),
-                "channels", dsp.getChannels(),
-                "cachedBlockIndices", dsp.getCachedBlockIndices(),
-                "inputGates", dsp.getInputGates(),
-                "inputCompressors", dsp.getInputCompressors(),
-                "limiters", dsp.getLimiters(),
-                "meters", dsp.getMeters()
+        return Map.ofEntries(
+                Map.entry("dspId", dsp.dspId()),
+                Map.entry("connected", dsp.isConnected()),
+                Map.entry("deviceInfo", dsp.getDeviceInfo()),
+                Map.entry("channels", dsp.getChannels()),
+                Map.entry("settingsCache", dsp.getSettingsCacheStatus()),
+                Map.entry("cachedBlockIndices", dsp.getCachedBlockIndices()),
+                Map.entry("matrixOutputs", dsp.getMatrixOutputs()),
+                Map.entry("inputGates", dsp.getInputGates()),
+                Map.entry("inputCompressors", dsp.getInputCompressors()),
+                Map.entry("limiters", dsp.getLimiters()),
+                Map.entry("meters", dsp.getMeters())
         );
     }
 
@@ -838,6 +1022,29 @@ public final class DspApiServlet extends HttpServlet {
             throw new IllegalArgumentException("Missing " + field + ".");
         }
         return String.valueOf(value).trim();
+    }
+
+    private String optionalString(Map<String, Object> body, String field) {
+        Object value = body.get(field);
+        return value == null || String.valueOf(value).isBlank()
+                ? null
+                : String.valueOf(value).trim();
+    }
+
+    private long optionalLong(Map<String, Object> body, String field, long fallback) {
+        Object value = body.get(field);
+        if (value == null) {
+            return fallback;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return Long.parseLong(String.valueOf(value).trim());
+    }
+
+    private double optionalDouble(Map<String, Object> body, String field, double fallback) {
+        Object value = body.get(field);
+        return value == null ? fallback : toDouble(value);
     }
 
     private List<Double> requireDoubleList(Map<String, Object> body, String field) {

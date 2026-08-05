@@ -98,6 +98,8 @@ public final class DspCommandProcessor {
                 case "opeqq" -> handleOutputPeqQ(commandParts);
                 case "opeqgain" -> handleOutputPeqGain(commandParts);
                 case "opeqtype" -> handleOutputPeqType(commandParts);
+                case "opeqbypass" -> handleOutputPeqBypass(commandParts);
+                case "peqallbypass" -> handleAllPeqBypass(commandParts);
 
                 case "ipeqset" -> handleInputPeqSet(commandParts);
                 case "ipeqfreq" -> handleInputPeqFreq(commandParts);
@@ -462,6 +464,20 @@ public final class DspCommandProcessor {
         );
     }
 
+    private void handleOutputPeqBypass(String[] parts) throws IOException {
+        requireArgs(parts, 4, "Usage: opeqbypass <out> <band> <on|off>");
+        controller.setOutputPeqBypass(
+                parseOutput(parts[1]),
+                Integer.parseInt(parts[2]),
+                parseOnOff(parts[3])
+        );
+    }
+
+    private void handleAllPeqBypass(String[] parts) throws IOException {
+        requireArgs(parts, 2, "Usage: peqallbypass <on|off>");
+        controller.setAllPeqBypass(parseOnOff(parts[1]));
+    }
+
     private void handleFirMode(String[] parts) throws IOException {
         requireArgs(parts, 3, "Usage: firmode <out> <iir|fir>");
         controller.setFirProcessingMode(parseOutput(parts[1]), FirProcessingMode.parse(parts[2]));
@@ -616,6 +632,8 @@ public final class DspCommandProcessor {
       opeqq <out> <band> <q>
       opeqgain <out> <band> <gainDb>
       opeqtype <out> <band> <type>
+      opeqbypass <out> <band> <on|off>
+      peqallbypass <on|off>
 
       ipeqset <in> <band> <type> <freqHz> <q> <gainDb> <on|off>
       ipeqfreq <in> <band> <freqHz>

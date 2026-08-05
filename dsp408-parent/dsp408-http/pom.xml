@@ -26,8 +26,8 @@
 
         <dependency>
             <groupId>org.osgi</groupId>
-            <artifactId>org.osgi.service.http.whiteboard</artifactId>
-            <version>1.1.1</version>
+            <artifactId>org.osgi.service.http</artifactId>
+            <version>1.2.2</version>
             <scope>provided</scope>
         </dependency>
 

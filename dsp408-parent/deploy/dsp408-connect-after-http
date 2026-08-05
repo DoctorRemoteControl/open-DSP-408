@@ -1,0 +1,22 @@
+#!/bin/sh
+set -u
+
+api="http://127.0.0.1:8181/api/v1"
+attempt=1
+
+# A connection now includes the verified 32-block FIR408 settings dump.
+# Keep one request alive long enough for that synchronization to finish;
+# short client timeouts would queue overlapping reconnect attempts.
+while [ "$attempt" -le 8 ]; do
+    if curl --fail --silent --show-error --max-time 120 \
+        --request POST "$api/connection/connect" >/dev/null; then
+        echo "DSP408 connection and settings-cache synchronization completed on attempt $attempt"
+        exit 0
+    fi
+    echo "DSP408 not ready (attempt $attempt/8); retrying in 5 seconds"
+    attempt=$((attempt + 1))
+    sleep 5
+done
+
+echo "DSP408 remains offline; HTTP API stays available"
+exit 0

@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 
 import de.drremote.dsp408controller.core.codec.DspCodecRegistry;
@@ -14,6 +15,7 @@ import de.drremote.dsp408controller.core.library.DspWriteCapabilities.Operation;
 import de.drremote.dsp408controller.core.library.OutputPeqBandDefaults;
 import de.drremote.dsp408controller.core.net.DspClient;
 import de.drremote.dsp408controller.core.net.DspConnectionConfig;
+import de.drremote.dsp408controller.core.net.DspTrafficSnapshot;
 import de.drremote.dsp408controller.core.protocol.CrossoverSlope;
 import de.drremote.dsp408controller.core.protocol.DspChannel;
 import de.drremote.dsp408controller.core.protocol.DspProtocol;
@@ -28,17 +30,23 @@ import de.drremote.dsp408controller.core.state.InputGateState;
 import de.drremote.dsp408controller.core.state.PeqBandState;
 
 public final class DspController {
-	private static final String OUTPUT_PEQ_INCOMPLETE_MESSAGE = "Band state incomplete. Run scanblocks first so output gain/frequency/Q are known. "
-			+ "The filter type falls back to the library default if it was not written yet.";
-	private static final String INPUT_PEQ_INCOMPLETE_MESSAGE = "Band state incomplete. Input PEQ bypass is currently read back only where the library has a bypass location. "
-			+ "Use ipeqset first when bypass is still unknown.";
+	private static final String OUTPUT_PEQ_INCOMPLETE_MESSAGE = "Band state incomplete. Run scanblocks first so output gain/frequency/Q/type/bypass are known. "
+			+ "The filter type may use an explicit library default; bypass never falls back.";
+	private static final String INPUT_PEQ_INCOMPLETE_MESSAGE = "Band state incomplete. Run scanblocks first so input gain/frequency/Q/type/bypass are known.";
 	private static final String INPUT_GEQ_RANGE_MESSAGE = "Input GEQ band index must be in range 1..31";
 	private static final String INPUT_GATE_INCOMPLETE_MESSAGE = "Gate state incomplete. Run scanblocks or use gateset first.";
 	private static final String HIGH_PASS_INCOMPLETE_MESSAGE = "High-pass state incomplete. Run scanblocks or use xhpset first.";
 	private static final String LOW_PASS_INCOMPLETE_MESSAGE = "Low-pass state incomplete. Output low-pass is readable, but input low-pass slope is not read back yet. Use xlpset first.";
+	private static final int FIR_LIMITER_WRITE_ATTEMPTS = 3;
+	private static final long FIR_LIMITER_WRITE_RETRY_DELAY_MS = 750L;
+	private static final long PARAMETER_BLOCK_SCAN_INTERVAL_MS = 350L;
+	private static final String LIBRARY_AUTO = "auto";
+	private static final String LIBRARY_DSP408 = "dsp408";
+	private static final String LIBRARY_FIR408 = "fir408";
 
 	private final DspState state = new DspState();
 	private DspLibrary library;
+	private volatile String preferredLibraryType = LIBRARY_AUTO;
 
 	private DspClient client;
 	private DspPayloadRouter router;
@@ -95,8 +103,28 @@ public final class DspController {
 		return library.meterLayout().limiterMappingConfirmed();
 	}
 
+	public boolean meterClipThresholdConfirmed(DspChannel channel) {
+		return library.meterLayout().clipThresholdConfirmed(channel);
+	}
+
 	public boolean hasFirFeatures() {
 		return library.hasFirFeatures();
+	}
+
+	public void setPreferredLibraryType(String libraryType) {
+		String normalized = libraryType == null
+				? LIBRARY_AUTO
+				: libraryType.trim().toLowerCase(Locale.ROOT);
+		if (normalized.isBlank()) {
+			normalized = LIBRARY_AUTO;
+		}
+		if (!List.of(LIBRARY_AUTO, LIBRARY_DSP408, LIBRARY_FIR408).contains(normalized)) {
+			throw new IllegalArgumentException("DSP library must be auto|dsp408|fir408: " + libraryType);
+		}
+		preferredLibraryType = normalized;
+		if (!isConnected()) {
+			library = loadPreferredLibrary();
+		}
 	}
 
 	public void connect(DspConnectionConfig config, Consumer<String> log) throws IOException {
@@ -105,11 +133,11 @@ public final class DspController {
 		deviceVersion = null;
 		lastSystemInfoPayload = null;
 		activeLog = log;
-		library = DspLibraryLoader.loadDefault();
+		library = loadPreferredLibrary();
 
 		client = new DspClient(config, log);
 		router = createRouter(log);
-		client.setPayloadListener(router::onPayload);
+		client.setPayloadListener(this::routePayload);
 		client.connect();
 		sleepSilently(250);
 	}
@@ -135,8 +163,8 @@ public final class DspController {
 		requireClient().requestSystemInfo();
 	}
 
-	public void requestRuntimeMeters() throws IOException {
-		requireClient().requestRuntimeMeters();
+	public boolean requestRuntimeMeters() throws IOException {
+		return requireClient().requestRuntimeMeters();
 	}
 
 	public void startMeterPolling(long intervalMs) {
@@ -145,6 +173,16 @@ public final class DspController {
 
 	public void stopMeterPolling() {
 		requireClient().stopMeterPolling();
+	}
+
+	public DspTrafficSnapshot trafficSnapshot() {
+		if (client == null) {
+			return new DspTrafficSnapshot(
+					0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+					null, 0L, false, null
+			);
+		}
+		return client.trafficSnapshot();
 	}
 
 	public void login(String pin) throws IOException {
@@ -199,6 +237,18 @@ public final class DspController {
 		requireClient().loadPreset(slotLabel);
 	}
 
+	public void setPresetName(String name) throws IOException {
+		requireClient().setPresetName(name);
+	}
+
+	public void storePreset(int presetIndex) throws IOException {
+		requireClient().storePreset(presetIndex);
+	}
+
+	public void storePreset(String slotLabel) throws IOException {
+		requireClient().storePreset(slotLabel);
+	}
+
 	public void setDelayUnit(int unitRaw) throws IOException {
 		requireClient().setDelayUnit(unitRaw);
 	}
@@ -226,10 +276,10 @@ public final class DspController {
 				.rawToDouble(DspCodecRegistry.peqFrequency().doubleToRaw(hz));
 
 		requireClient().setOutputPeq(outputNumber(channel), peqIndex, resolved.gainDb(), normalizedFrequencyHz,
-				resolved.q(), resolved.filterType());
+				resolved.q(), resolved.filterType(), resolved.bypass());
 
 		state.markOutputPeqBand(channel, peqIndex, resolved.gainDb(), normalizedFrequencyHz, resolved.q(),
-				resolved.filterType(), "tx");
+				resolved.filterType(), resolved.bypass(), "tx");
 	}
 
 	public void setOutputPeqQRaw(DspChannel channel, int peqIndex, int qRaw) throws IOException {
@@ -249,10 +299,10 @@ public final class DspController {
 		double normalizedQ = DspCodecRegistry.peqQ().rawToDouble(DspCodecRegistry.peqQ().doubleToRaw(q));
 
 		requireClient().setOutputPeq(outputNumber(channel), peqIndex, resolved.gainDb(), resolved.frequencyHz(),
-				normalizedQ, resolved.filterType());
+				normalizedQ, resolved.filterType(), resolved.bypass());
 
 		state.markOutputPeqBand(channel, peqIndex, resolved.gainDb(), resolved.frequencyHz(), normalizedQ,
-				resolved.filterType(), "tx");
+				resolved.filterType(), resolved.bypass(), "tx");
 	}
 
 	public void setOutputPeqGain(DspChannel channel, int peqIndex, double gainDb) throws IOException {
@@ -262,10 +312,10 @@ public final class DspController {
 		double normalizedGain = DspCodecRegistry.peqGain().rawToDouble(DspCodecRegistry.peqGain().doubleToRaw(gainDb));
 
 		requireClient().setOutputPeq(outputNumber(channel), peqIndex, normalizedGain, resolved.frequencyHz(),
-				resolved.q(), resolved.filterType());
+				resolved.q(), resolved.filterType(), resolved.bypass());
 
 		state.markOutputPeqBand(channel, peqIndex, normalizedGain, resolved.frequencyHz(), resolved.q(),
-				resolved.filterType(), "tx");
+				resolved.filterType(), resolved.bypass(), "tx");
 	}
 
 	public void setOutputPeqType(DspChannel channel, int peqIndex, PeqFilterType filterType) throws IOException {
@@ -274,14 +324,22 @@ public final class DspController {
 		PeqBandState resolved = requireKnownOutputPeqBand(channel, peqIndex);
 
 		requireClient().setOutputPeq(outputNumber(channel), peqIndex, resolved.gainDb(), resolved.frequencyHz(),
-				resolved.q(), filterType);
+				resolved.q(), filterType, resolved.bypass());
 
 		state.markOutputPeqBand(channel, peqIndex, resolved.gainDb(), resolved.frequencyHz(), resolved.q(), filterType,
-				"tx");
+				resolved.bypass(), "tx");
 	}
 
 	public void setOutputPeq(DspChannel channel, int peqIndex, PeqFilterType filterType, double frequencyHz, double q,
 			double gainDb) throws IOException {
+		requireOutput(channel);
+		requireVerifiedWrite(Operation.OUTPUT_PEQ, channel, "Output PEQ");
+		boolean bypass = requireKnownOutputPeqBypass(channel, peqIndex);
+		setOutputPeq(channel, peqIndex, filterType, frequencyHz, q, gainDb, bypass);
+	}
+
+	public void setOutputPeq(DspChannel channel, int peqIndex, PeqFilterType filterType, double frequencyHz, double q,
+			double gainDb, boolean bypass) throws IOException {
 		requireOutput(channel);
 		requireVerifiedWrite(Operation.OUTPUT_PEQ, channel, "Output PEQ");
 		if (peqIndex < 1 || peqIndex > 9) {
@@ -294,10 +352,22 @@ public final class DspController {
 		double normalizedGain = DspCodecRegistry.peqGain().rawToDouble(DspCodecRegistry.peqGain().doubleToRaw(gainDb));
 
 		requireClient().setOutputPeq(outputNumber(channel), peqIndex, normalizedGain, normalizedFrequencyHz,
-				normalizedQ, filterType);
+				normalizedQ, filterType, bypass);
 
 		state.markOutputPeqBand(channel, peqIndex, normalizedGain, normalizedFrequencyHz, normalizedQ, filterType,
-				"tx");
+				bypass, "tx");
+	}
+
+	public void setOutputPeqBypass(DspChannel channel, int peqIndex, boolean bypass) throws IOException {
+		requireOutput(channel);
+		requireVerifiedWrite(Operation.OUTPUT_PEQ, channel, "Output PEQ");
+		PeqBandState resolved = requireKnownOutputPeqBand(channel, peqIndex);
+
+		requireClient().setOutputPeq(outputNumber(channel), peqIndex, resolved.gainDb(), resolved.frequencyHz(),
+				resolved.q(), resolved.filterType(), bypass);
+
+		state.markOutputPeqBand(channel, peqIndex, resolved.gainDb(), resolved.frequencyHz(), resolved.q(),
+				resolved.filterType(), bypass, "tx");
 	}
 
 	public void setInputPeq(DspChannel channel, int peqIndex, PeqFilterType filterType, double frequencyHz, double q,
@@ -385,6 +455,42 @@ public final class DspController {
 
 		state.markInputPeqBand(channel, peqIndex, resolved.gainDb(), resolved.frequencyHz(), resolved.q(),
 				resolved.filterType(), bypass, "tx");
+	}
+
+	/**
+	 * Sets all 104 FIR408 PEQ bypass flags after validating the complete command state up front.
+	 * No write is sent when any band is missing gain, frequency, Q, type or bypass readback.
+	 */
+	public void setAllPeqBypass(boolean bypass) throws IOException {
+		List<DspChannel> inputs = List.of(
+				DspChannel.IN_A, DspChannel.IN_B, DspChannel.IN_C, DspChannel.IN_D);
+		List<DspChannel> outputs = List.of(
+				DspChannel.OUT_1, DspChannel.OUT_2, DspChannel.OUT_3, DspChannel.OUT_4,
+				DspChannel.OUT_5, DspChannel.OUT_6, DspChannel.OUT_7, DspChannel.OUT_8);
+
+		for (DspChannel input : inputs) {
+			requireVerifiedWrite(Operation.INPUT_PEQ, input, "Input PEQ");
+			for (int peqIndex = 1; peqIndex <= 8; peqIndex++) {
+				requireKnownInputPeqBand(input, peqIndex);
+			}
+		}
+		for (DspChannel output : outputs) {
+			requireVerifiedWrite(Operation.OUTPUT_PEQ, output, "Output PEQ");
+			for (int peqIndex = 1; peqIndex <= 9; peqIndex++) {
+				requireKnownOutputPeqBand(output, peqIndex);
+			}
+		}
+
+		for (DspChannel input : inputs) {
+			for (int peqIndex = 1; peqIndex <= 8; peqIndex++) {
+				setInputPeqBypass(input, peqIndex, bypass);
+			}
+		}
+		for (DspChannel output : outputs) {
+			for (int peqIndex = 1; peqIndex <= 9; peqIndex++) {
+				setOutputPeqBypass(output, peqIndex, bypass);
+			}
+		}
 	}
 
 	public void setInputGeq(DspChannel channel, int bandIndex, double gainDb) throws IOException {
@@ -632,7 +738,14 @@ public final class DspController {
 		double normalizedThresholdDb = DspCodecRegistry
 				.rawToDynamicsThresholdDb(DspCodecRegistry.dynamicsThresholdDbToRaw(thresholdDb, -90.0, 20.0));
 
-		requireClient().setLimiter(output, normalizedAttackMs, normalizedReleaseMs, kneeRaw, normalizedThresholdDb);
+		DspClient activeClient = requireClient();
+		int attempts = library.hasFirFeatures() ? FIR_LIMITER_WRITE_ATTEMPTS : 1;
+		for (int attempt = 1; attempt <= attempts; attempt++) {
+			activeClient.setLimiter(output, normalizedAttackMs, normalizedReleaseMs, kneeRaw, normalizedThresholdDb);
+			if (attempt < attempts) {
+				sleepSilently(FIR_LIMITER_WRITE_RETRY_DELAY_MS);
+			}
+		}
 
 		state.markLimiter(output, normalizedAttackMs, normalizedReleaseMs, kneeRaw, normalizedThresholdDb, "tx");
 	}
@@ -660,9 +773,32 @@ public final class DspController {
 
 	public void scanParameterBlocks() throws IOException {
 		for (int i = 0x00; i <= library.maxParameterBlockIndex(); i++) {
-			readParameterBlock(i);
-			sleepSilently(150);
+			readParameterBlockPaced(i);
 		}
+	}
+
+	public void scanParameterBlocks(Iterable<Integer> blockIndices) throws IOException {
+		if (blockIndices == null) {
+			return;
+		}
+		for (Integer blockIndex : blockIndices) {
+			if (blockIndex == null
+					|| blockIndex < 0x00
+					|| blockIndex > library.maxParameterBlockIndex()) {
+				continue;
+			}
+			readParameterBlockPaced(blockIndex);
+		}
+	}
+
+	private void readParameterBlockPaced(int blockIndex) throws IOException {
+		readParameterBlock(blockIndex);
+		/*
+		 * FIR408 suppresses replies when block requests arrive at the generic
+		 * 150 ms command-queue cadence. 350 ms preserves responses during a
+		 * physical dump.
+		 */
+		sleepSilently(PARAMETER_BLOCK_SCAN_INTERVAL_MS);
 	}
 
 	private DspClient requireClient() {
@@ -701,7 +837,27 @@ public final class DspController {
 		return new DspPayloadRouter(state, log, this::updateDeviceVersion, this::updateSystemInfo, library);
 	}
 
+	private void routePayload(byte[] payload) {
+		if (payload != null
+				&& payload.length == 46
+				&& DspProtocol.isRuntimeMeterResponse(payload)
+				&& !"fir408".equals(library.libraryType())) {
+			if (deviceVersion == null || deviceVersion.isBlank()) {
+				deviceVersion = "FIR408 (inferred from 46-byte cmd40)";
+			}
+			selectLibraryForDeviceVersion("FIR408");
+		}
+
+		DspPayloadRouter currentRouter = router;
+		if (currentRouter != null) {
+			currentRouter.onPayload(payload);
+		}
+	}
+
 	private void selectLibraryForDeviceVersion(String version) {
+		if (!LIBRARY_AUTO.equals(preferredLibraryType)) {
+			return;
+		}
 		DspLibrary selected = DspLibraryLoader.loadForDeviceVersion(version);
 		if (selected.libraryType().equals(library.libraryType())) {
 			return;
@@ -711,12 +867,18 @@ public final class DspController {
 		Consumer<String> log = activeLog;
 		router = createRouter(log);
 		if (client != null) {
-			client.setPayloadListener(router::onPayload);
+			client.setPayloadListener(this::routePayload);
 		}
 		if (log != null) {
 			log.accept("DSP library selected: " + library.libraryType()
 					+ " blocks=00.." + String.format("%02X", library.maxParameterBlockIndex()));
 		}
+	}
+
+	private DspLibrary loadPreferredLibrary() {
+		return LIBRARY_FIR408.equals(preferredLibraryType)
+				? DspLibraryLoader.loadFir408()
+				: DspLibraryLoader.loadDefault();
 	}
 
 	private static void sleepSilently(long ms) {
@@ -765,7 +927,8 @@ public final class DspController {
 		}
 
 		PeqBandState existing = state.outputPeq(channel).band(peqIndex);
-		if (existing == null || existing.gainDb() == null || existing.frequencyHz() == null || existing.q() == null) {
+		if (existing == null || existing.gainDb() == null || existing.frequencyHz() == null || existing.q() == null
+				|| existing.bypass() == null) {
 			throw new IllegalStateException(OUTPUT_PEQ_INCOMPLETE_MESSAGE);
 		}
 
@@ -792,8 +955,21 @@ public final class DspController {
 				existing.frequencyConfirmedFromDevice());
 		resolved.updateQ(existing.q(), existing.lastQUpdateSource(), existing.qConfirmedFromDevice());
 		resolved.updateFilterType(resolvedFilterType, typeSource, typeConfirmed);
+		resolved.updateBypass(existing.bypass(), existing.lastBypassUpdateSource(),
+				existing.bypassConfirmedFromDevice());
 
 		return resolved;
+	}
+
+	private boolean requireKnownOutputPeqBypass(DspChannel channel, int peqIndex) {
+		if (peqIndex < 1 || peqIndex > 9) {
+			throw new IllegalArgumentException("PEQ index must be in range 1..9");
+		}
+		PeqBandState existing = state.outputPeq(channel).band(peqIndex);
+		if (existing == null || existing.bypass() == null) {
+			throw new IllegalStateException(OUTPUT_PEQ_INCOMPLETE_MESSAGE);
+		}
+		return existing.bypass();
 	}
 
 	private PeqBandState requireKnownInputPeqBand(DspChannel channel, int peqIndex) {

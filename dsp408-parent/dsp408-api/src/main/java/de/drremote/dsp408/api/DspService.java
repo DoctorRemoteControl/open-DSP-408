@@ -40,6 +40,30 @@ public interface DspService {
 
     ChannelDto getChannel(String channelId);
 
+    default List<MatrixOutputDto> getMatrixOutputs() {
+        return List.of();
+    }
+
+    default MatrixOutputDto getMatrixOutput(String outputId) {
+        String requested = outputId == null ? "" : outputId.trim();
+        return getMatrixOutputs().stream()
+                .filter(output -> output.id().equalsIgnoreCase(requested))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Unknown matrix output: " + outputId));
+    }
+
+    default List<PeqChannelDto> getPeqChannels() {
+        return List.of();
+    }
+
+    default PeqChannelDto getPeqChannel(String channelId) {
+        String requested = channelId == null ? "" : channelId.trim();
+        return getPeqChannels().stream()
+                .filter(channel -> channel.id().equalsIgnoreCase(requested))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Unknown PEQ channel: " + channelId));
+    }
+
     default List<InputGateDto> getInputGates() {
         return List.of();
     }
@@ -80,6 +104,54 @@ public interface DspService {
                 .orElseThrow(() -> new IllegalArgumentException("Unknown meter channel: " + channelId));
     }
 
+    default TrafficStatusDto getTrafficStatus() {
+        return new TrafficStatusDto(
+                isConnected(),
+                0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+                null, null, false, null, null
+        );
+    }
+
+    default SettingsCacheDto getSettingsCacheStatus() {
+        return SettingsCacheDto.empty();
+    }
+
+    default AutoLimitLeaseDto getAutoLimitLease() {
+        return new AutoLimitLeaseDto(false, false, null, null, null, "Auto-Limit is available.");
+    }
+
+    default AutoLimitLeaseDto acquireAutoLimitLease(String owner, long ttlMs) {
+        return new AutoLimitLeaseDto(false, true, owner, null, null, "Auto-Limit lease not required.");
+    }
+
+    default AutoLimitLeaseDto renewAutoLimitLease(String token, long ttlMs) {
+        return getAutoLimitLease();
+    }
+
+    default AutoLimitLeaseDto releaseAutoLimitLease(String token) {
+        return getAutoLimitLease();
+    }
+
+    default boolean ownsAutoLimitLease(String token) {
+        return true;
+    }
+
+    default AutoLimitStatusDto getAutoLimitStatus() {
+        return AutoLimitStatusDto.idle();
+    }
+
+    default AutoLimitStatusDto startAutoLimit(double headroomDb, String targetMode, long measurementMs) {
+        throw new UnsupportedOperationException("Server-side Auto-Limit is not available.");
+    }
+
+    default AutoLimitStatusDto cancelAutoLimit() {
+        return getAutoLimitStatus();
+    }
+
+    default AutoLimitStatusDto undoAutoLimit() {
+        throw new UnsupportedOperationException("Server-side Auto-Limit undo is not available.");
+    }
+
     ChannelDto setGain(String channelId, double db) throws Exception;
 
     ChannelDto mute(String channelId) throws Exception;
@@ -94,6 +166,8 @@ public interface DspService {
 
     StateDto scanBlocks() throws Exception;
 
+    PresetSnapshotDto exportPresetSnapshot() throws Exception;
+
     RawTxDto sendRawHex(String payloadHex) throws Exception;
 
     void loginPin(String pin) throws Exception;
@@ -101,6 +175,8 @@ public interface DspService {
     RawTxDto loadPreset(String slotLabel) throws Exception;
 
     RawTxDto loadPreset(int presetIndex) throws Exception;
+
+    PresetStoreResultDto storePreset(String slotLabel, String name) throws Exception;
 
     RawTxDto readPresetName(int presetIndex) throws Exception;
 
@@ -156,6 +232,8 @@ public interface DspService {
 
     RawTxDto setOutputPeqType(String channelId, int peqIndex, String filterType) throws Exception;
 
+    RawTxDto setOutputPeqBypass(String channelId, int peqIndex, boolean bypass) throws Exception;
+
     RawTxDto setInputPeq(String channelId, int peqIndex, String filterType, double frequencyHz, double q, double gainDb,
                          boolean bypass) throws Exception;
 
@@ -168,6 +246,8 @@ public interface DspService {
     RawTxDto setInputPeqType(String channelId, int peqIndex, String filterType) throws Exception;
 
     RawTxDto setInputPeqBypass(String channelId, int peqIndex, boolean bypass) throws Exception;
+
+    List<RawTxDto> setAllPeqBypass(boolean bypass) throws Exception;
 
     RawTxDto setInputGeq(String channelId, int bandIndex, double gainDb) throws Exception;
 

@@ -96,10 +96,11 @@ public final class DspTextFormatter {
             sb.append(System.lineSeparator());
             sb.append(String.format(
                     Locale.ROOT,
-                    "%-5s  Raw=%-8s Aux=%-6s Src=%s",
+                    "%-5s  Raw=%-8s Frac=%-6s Clip=%-3s Src=%s",
                     meter.channel().displayName(),
                     meter.rawValue() == null ? "-" : String.format(Locale.ROOT, "0x%04X", meter.rawValue()),
                     meter.slotByte2() == null ? "-" : String.format(Locale.ROOT, "0x%02X", meter.slotByte2()),
+                    meter.clipActive() == null ? "-" : (meter.clipActive() ? "ON" : "off"),
                     source(meter.lastUpdateSource())
             ));
         }

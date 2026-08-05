@@ -1229,8 +1229,27 @@ public final class DspLibraryLoader {
         int responseLengthBytes = read.path("response_length_bytes_observed").asInt(42);
 
         JsonNode tailBytes = required(read, "response_structure", "tail_bytes");
-        int statusByteOffset = findTailByteOffset(tailBytes, "status_byte_40", 40);
+        int statusByteOffset = findTailByteOffset(
+                tailBytes,
+                "input_runtime_status",
+                findTailByteOffset(tailBytes, "status_byte_40", 40)
+        );
         int limiterMaskOffset = findTailByteOffset(tailBytes, "output_limiter_mask", 41);
+        JsonNode clipIndicator = read.path("clip_indicator_runtime");
+        Double clipThresholdRaw = clipIndicator.has("threshold_raw_precise")
+                && readEvidenceAllowed(root, clipIndicator)
+                ? clipIndicator.get("threshold_raw_precise").asDouble()
+                : null;
+        Set<DspChannel> confirmedClipThresholdChannels = EnumSet.noneOf(DspChannel.class);
+        JsonNode confirmedClipChannels = clipIndicator.path("confirmed_channels");
+        if (confirmedClipChannels.isArray()) {
+            for (JsonNode channel : confirmedClipChannels) {
+                DspChannel parsed = DspChannel.parse(channel.asText());
+                if (readEvidenceAllowed(root, clipIndicator)) {
+                    confirmedClipThresholdChannels.add(parsed);
+                }
+            }
+        }
 
         JsonNode slotMapping = read.path("slot_mapping");
         JsonNode levelCalibration = read.path("value_encoding").path("physical_level_calibration");
@@ -1247,6 +1266,8 @@ public final class DspLibraryLoader {
                 responseLengthBytes,
                 statusByteOffset,
                 limiterMaskOffset,
+                clipThresholdRaw,
+                confirmedClipThresholdChannels,
                 channelMappingConfirmed,
                 levelCalibrationConfirmed,
                 limiterMappingConfirmed

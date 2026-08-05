@@ -27,6 +27,9 @@ public @interface MatrixBotConfiguration {
     @AttributeDefinition(name = "Volume Room ID")
     String volume_room_id() default "";
 
+    @AttributeDefinition(name = "Limiter Warning Room ID")
+    String warning_room_id() default "";
+
     @AttributeDefinition(name = "Machine Room ID")
     String machine_room_id() default "";
 
@@ -44,6 +47,15 @@ public @interface MatrixBotConfiguration {
 
     @AttributeDefinition(name = "Reconnect Delay ms")
     int reconnect_delay_ms() default 3000;
+
+    @AttributeDefinition(name = "Limiter Warnings Enabled")
+    boolean limiter_warnings_enabled() default true;
+
+    @AttributeDefinition(name = "Limiter Warning Poll ms")
+    int limiter_warning_poll_ms() default 1000;
+
+    @AttributeDefinition(name = "Limiter Warning Cooldown ms")
+    int limiter_warning_cooldown_ms() default 15000;
 
     @AttributeDefinition(name = "Connect DSP On Start")
     boolean connect_dsp_on_start() default true;

@@ -1,8 +1,8 @@
 package de.drremote.dsp408controller.core.state;
 
 /**
- * Converts the two-byte runtime meter word to the empirically calibrated
- * FIR408/DSP408 meter scale.
+ * Converts the three-byte runtime meter word (u16 little-endian plus one
+ * fractional byte) to the empirically calibrated FIR408/DSP408 meter scale.
  */
 public final class MeterLevelDecoder {
     private static final double ZERO_DB_RAW = 15397.5257354183;
@@ -13,7 +13,12 @@ public final class MeterLevelDecoder {
     }
 
     public static double decodeDb(int rawValue) {
-        double db = (rawValue - ZERO_DB_RAW) / RAW_VALUES_PER_DB;
+        return decodeDb(rawValue, 0);
+    }
+
+    public static double decodeDb(int rawValue, int fractionByte) {
+        double preciseRawValue = rawValue + ((fractionByte & 0xFF) / 256.0);
+        double db = (preciseRawValue - ZERO_DB_RAW) / RAW_VALUES_PER_DB;
         double limited = Math.max(MINIMUM_DB, db);
         return Math.round(limited * 100.0) / 100.0;
     }

@@ -11,6 +11,8 @@ import de.drremote.dsp408controller.core.codec.DspCodecRegistry;
 public final class DspProtocol {
     private static final byte CMD_DELAY_UNIT = 0x15;
     private static final byte CMD_PRESET_LOAD = 0x20;
+    private static final byte CMD_PRESET_STORE = 0x21;
+    private static final byte CMD_PRESET_NAME = 0x26;
     private static final byte CMD_READ_PRESET_NAME = 0x29;
     private static final byte CMD_HANDSHAKE_INIT = 0x10;
     private static final byte CMD_HANDSHAKE_ACK = 0x13;
@@ -91,6 +93,15 @@ public final class DspProtocol {
 
     public static byte[] runtimeMeterRequest() {
         return new byte[]{0x00, 0x01, 0x01, CMD_RUNTIME_METERS};
+    }
+
+    public static boolean isRuntimeMeterRequest(byte[] payload) {
+        return payload != null
+                && payload.length == 4
+                && (payload[0] & 0xFF) == 0x00
+                && (payload[1] & 0xFF) == 0x01
+                && (payload[2] & 0xFF) == 0x01
+                && (payload[3] & 0xFF) == (CMD_RUNTIME_METERS & 0xFF);
     }
 
     public static boolean isAck(byte[] payload) {
@@ -176,6 +187,58 @@ public final class DspProtocol {
         return loadPreset(parsePresetSlot(slotLabel));
     }
 
+    public static byte[] storePreset(int presetIndex) {
+        checkUserPresetIndex(presetIndex);
+        return new byte[]{
+                0x00,
+                0x01,
+                0x02,
+                CMD_PRESET_STORE,
+                (byte) presetIndex
+        };
+    }
+
+    public static byte[] storePreset(String slotLabel) {
+        return storePreset(parsePresetSlot(slotLabel));
+    }
+
+    public static byte[] buildPresetName(String name) {
+        byte[] ascii = presetNameBytes(name);
+        byte[] payload = new byte[18];
+        payload[0] = 0x00;
+        payload[1] = 0x01;
+        payload[2] = 0x0F;
+        payload[3] = CMD_PRESET_NAME;
+        Arrays.fill(payload, 4, payload.length, (byte) 0x20);
+        System.arraycopy(ascii, 0, payload, 4, ascii.length);
+        return payload;
+    }
+
+    public static boolean isPresetNameResponse(byte[] payload) {
+        return payload != null
+                && payload.length >= 5
+                && (payload[0] & 0xFF) == 0x01
+                && (payload[3] & 0xFF) == (CMD_READ_PRESET_NAME & 0xFF);
+    }
+
+    public static int presetNameResponseIndex(byte[] payload) {
+        if (!isPresetNameResponse(payload)) {
+            throw new IllegalArgumentException("Not a preset-name response");
+        }
+        return payload[4] & 0xFF;
+    }
+
+    public static String presetNameResponseName(byte[] payload) {
+        if (!isPresetNameResponse(payload)) {
+            throw new IllegalArgumentException("Not a preset-name response");
+        }
+        int end = payload.length;
+        while (end > 5 && (payload[end - 1] == 0x00 || payload[end - 1] == 0x20)) {
+            end--;
+        }
+        return new String(payload, 5, end - 5, StandardCharsets.US_ASCII);
+    }
+
     public static int parsePresetSlot(String slotLabel) {
         if (slotLabel == null || slotLabel.isBlank()) {
             throw new IllegalArgumentException("Preset slot is required");
@@ -188,13 +251,13 @@ public final class DspProtocol {
 
         if (normalized.matches("U\\d{2}")) {
             int userIndex = Integer.parseInt(normalized.substring(1));
-            if (userIndex < 1 || userIndex > 20) {
-                throw new IllegalArgumentException("User preset must be U01..U20");
+            if (userIndex < 1 || userIndex > 19) {
+                throw new IllegalArgumentException("User preset must be U01..U19");
             }
             return userIndex;
         }
 
-        throw new IllegalArgumentException("Preset slot must be F00 or U01..U20");
+        throw new IllegalArgumentException("Preset slot must be F00 or U01..U19");
     }
 
     public static byte[] login(String pin) {
@@ -414,13 +477,24 @@ public final class DspProtocol {
                                         double frequencyHz,
                                         double q,
                                         PeqFilterType filterType) {
+        return buildOutputPeq(outputNumber, peqIndex, gainDb, frequencyHz, q, filterType, false);
+    }
+
+    public static byte[] buildOutputPeq(int outputNumber,
+                                        int peqIndex,
+                                        double gainDb,
+                                        double frequencyHz,
+                                        double q,
+                                        PeqFilterType filterType,
+                                        boolean bypass) {
         return buildOutputPeqRaw(
                 outputNumber,
                 peqIndex,
                 DspCodecRegistry.peqGain().doubleToRaw(gainDb),
                 DspCodecRegistry.peqFrequency().doubleToRaw(frequencyHz),
                 DspCodecRegistry.peqQ().doubleToRaw(q),
-                filterType
+                filterType,
+                bypass
         );
     }
 
@@ -943,6 +1017,16 @@ public final class DspProtocol {
                                             int frequencyRaw,
                                             int qRaw,
                                             PeqFilterType filterType) {
+        return buildOutputPeqRaw(outputNumber, peqIndex, gainRaw, frequencyRaw, qRaw, filterType, false);
+    }
+
+    private static byte[] buildOutputPeqRaw(int outputNumber,
+                                            int peqIndex,
+                                            int gainRaw,
+                                            int frequencyRaw,
+                                            int qRaw,
+                                            PeqFilterType filterType,
+                                            boolean bypass) {
         checkOutputNumber(outputNumber);
         checkPeqIndex(peqIndex);
         checkPeqQRaw(qRaw);
@@ -960,7 +1044,7 @@ public final class DspProtocol {
                 (byte) ((frequencyRaw >>> 8) & 0xFF),
                 (byte) (qRaw & 0xFF),
                 (byte) filterType.rawValue(),
-                0x00
+                (byte) (bypass ? 0x01 : 0x00)
         };
     }
 
@@ -1228,9 +1312,32 @@ public final class DspProtocol {
     }
 
     private static void checkPresetIndex(int presetIndex) {
-        if (presetIndex < 0 || presetIndex > 20) {
-            throw new IllegalArgumentException("Preset index must be in range 0..20");
+        if (presetIndex < 0 || presetIndex > 19) {
+            throw new IllegalArgumentException("Preset index must be in range 0..19");
         }
+    }
+
+    private static void checkUserPresetIndex(int presetIndex) {
+        if (presetIndex < 1 || presetIndex > 19) {
+            throw new IllegalArgumentException("Writable preset index must be in range 1..19");
+        }
+    }
+
+    private static byte[] presetNameBytes(String name) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("Preset name is required");
+        }
+        String trimmed = name.trim();
+        if (trimmed.length() > 14) {
+            throw new IllegalArgumentException("Preset name must contain at most 14 ASCII characters");
+        }
+        for (int index = 0; index < trimmed.length(); index++) {
+            char value = trimmed.charAt(index);
+            if (value < 0x20 || value > 0x7E) {
+                throw new IllegalArgumentException("Preset name must contain printable ASCII characters only");
+            }
+        }
+        return trimmed.getBytes(StandardCharsets.US_ASCII);
     }
 
     private static void checkDelayUnit(int unitRaw) {

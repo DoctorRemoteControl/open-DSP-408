@@ -9,9 +9,12 @@ public final class MeterChannelState {
     private Integer rawHighByte;
     private Integer rawValue;
     private Integer slotByte2;
+    private Boolean clipActive;
 
     private boolean confirmedFromDevice;
+    private boolean clipDerivedFromDeviceMeter;
     private String lastUpdateSource;
+    private String lastClipUpdateSource;
 
     public MeterChannelState(DspChannel channel) {
         this.channel = channel;
@@ -37,16 +40,32 @@ public final class MeterChannelState {
         return slotByte2;
     }
 
+    public synchronized Boolean clipActive() {
+        return clipActive;
+    }
+
     public synchronized boolean confirmedFromDevice() {
         return confirmedFromDevice;
+    }
+
+    public synchronized boolean clipDerivedFromDeviceMeter() {
+        return clipDerivedFromDeviceMeter;
     }
 
     public synchronized String lastUpdateSource() {
         return lastUpdateSource;
     }
 
+    public synchronized String lastClipUpdateSource() {
+        return lastClipUpdateSource;
+    }
+
     public synchronized boolean hasAnyValues() {
-        return rawLowByte != null || rawHighByte != null || rawValue != null || slotByte2 != null;
+        return rawLowByte != null
+                || rawHighByte != null
+                || rawValue != null
+                || slotByte2 != null
+                || clipActive != null;
     }
 
     public synchronized void update(int rawLowByte, int rawHighByte, int slotByte2, String source, boolean confirmed) {
@@ -57,4 +76,11 @@ public final class MeterChannelState {
         this.lastUpdateSource = source;
         this.confirmedFromDevice = confirmed;
     }
+
+    public synchronized void updateClipFromMeter(boolean clipActive, String source, boolean confirmed) {
+        this.clipActive = clipActive;
+        this.lastClipUpdateSource = source;
+        this.clipDerivedFromDeviceMeter = confirmed;
+    }
+
 }

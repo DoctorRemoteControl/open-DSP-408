@@ -90,6 +90,16 @@ public final class DspPayloadRouter {
             return;
         }
 
+        if (DspProtocol.isPresetNameResponse(payload)) {
+            int presetIndex = DspProtocol.presetNameResponseIndex(payload);
+            String presetName = DspProtocol.presetNameResponseName(payload);
+            state.storePresetName(presetIndex, presetName);
+            if (log != null) {
+                log.accept("PRESET NAME RX index=" + presetIndex + " name=" + presetName);
+            }
+            return;
+        }
+
         if (DspProtocol.isBlockResponse(payload)) {
             int blockIndex = DspProtocol.blockResponseIndex(payload);
             byte[] data = DspProtocol.blockResponseData(payload);

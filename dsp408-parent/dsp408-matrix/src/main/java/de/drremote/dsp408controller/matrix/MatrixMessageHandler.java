@@ -19,6 +19,7 @@ public final class MatrixMessageHandler {
     private final MatrixApiClient api;
     private final ExecutorService dspExecutor;
     private final String botUserId;
+    private final LimiterWarningMonitor warningMonitor;
     private final Consumer<String> log;
     private final ObjectMapper mapper = new ObjectMapper();
     private final MatrixDspCommandDispatcher dispatcher;
@@ -28,12 +29,14 @@ public final class MatrixMessageHandler {
                                 MatrixApiClient api,
                                 ExecutorService dspExecutor,
                                 String botUserId,
+                                LimiterWarningMonitor warningMonitor,
                                 Consumer<String> log) {
         this.config = config;
         this.service = service;
         this.api = api;
         this.dspExecutor = dspExecutor;
         this.botUserId = botUserId;
+        this.warningMonitor = warningMonitor;
         this.log = log;
         this.dispatcher = new MatrixDspCommandDispatcher(service);
     }
@@ -111,16 +114,30 @@ public final class MatrixMessageHandler {
                     continue;
                 }
 
-                String lowerBody = commandText.toLowerCase(Locale.ROOT);
-                if (!lowerBody.startsWith("!dsp volume")) {
-                    continue;
-                }
-
                 dspExecutor.submit(() -> {
                     try {
                         log.accept("[volume] " + sender + " -> " + commandText);
                         String response = service.executeVolumeRoom(commandText);
                         if (response != null && !response.isBlank()) {
+                            api.sendText(targetRoomId, response, response.contains("\n") || response.contains("\r"));
+                        }
+                    } catch (Exception e) {
+                        sendError(targetRoomId, e);
+                    }
+                });
+                continue;
+            }
+
+            if ("warning".equals(mode)) {
+                if (!config.isUserAllowed(sender) || warningMonitor == null) {
+                    continue;
+                }
+
+                dspExecutor.submit(() -> {
+                    try {
+                        String response = warningMonitor.handleRoomCommand(commandText);
+                        if (response != null && !response.isBlank()) {
+                            log.accept("[warning] " + sender + " -> " + commandText);
                             api.sendText(targetRoomId, response, response.contains("\n") || response.contains("\r"));
                         }
                     } catch (Exception e) {
@@ -343,6 +360,14 @@ public final class MatrixMessageHandler {
                     "!dsp opeqtype " + requireText(args, "channelId")
                             + " " + requireNumber(args, "peqIndex")
                             + " " + requireText(args, "type");
+
+            case "output.peq.bypass.set", "channel.peq.bypass.set" ->
+                    "!dsp opeqbypass " + requireText(args, "channelId")
+                            + " " + requireNumber(args, "peqIndex")
+                            + " " + requireOnOff(args, "bypass");
+
+            case "peq.bypass_all.set", "peq.bypass-all.set" ->
+                    "!dsp peqallbypass " + requireOnOff(args, "bypass");
 
             case "input.peq.set" ->
                     "!dsp ipeqset " + requireText(args, "channelId")

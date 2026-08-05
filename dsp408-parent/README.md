@@ -246,8 +246,10 @@ Example:
 config:edit de.drremote.dsp408controller
 config:property-set dsp.ip 192.168.0.166
 config:property-set dsp.port 9761
+config:property-set dsp.library fir408
 config:property-set auto.connect true
 config:property-set auto.read.on.connect true
+config:property-set meter.poll.interval.ms 200
 config:property-set volume.step.db 1.0
 config:update
 ```
@@ -349,8 +351,10 @@ de.drremote.dsp408controller
 | `dsp.id`               | default DSP id                                  |
 | `dsp.ip`               | default DSP IP address                          |
 | `dsp.port`             | default DSP TCP port                            |
+| `dsp.library`          | protocol library: `fir408`, `dsp408` or `auto` |
 | `auto.connect`         | connect automatically when the component starts |
-| `auto.read.on.connect` | scan parameter blocks after connect             |
+| `auto.read.on.connect` | compatibility flag; the verified startup dump is always performed |
+| `meter.poll.interval.ms` | central DSP meter polling interval; clients read the cache |
 | `volume.step.db`       | default step for grouped volume up/down         |
 | `dsps`                 | optional additional DSPs as `id=ip[:port]`      |
 
@@ -359,7 +363,9 @@ de.drremote.dsp408controller
 * If `auto.connect=true`, the component tries to connect during activation.
 * If the configured DSP IP or port changes while connected, the component reconnects automatically.
 * `connect()` always uses the current OSGi configuration.
-* If `auto.read.on.connect=true`, a full parameter block scan runs after a successful connect.
+* Every successful connection performs one verified full parameter dump before settings access is marked ready.
+* The runtime is the only active meter poller. HTTP, Android, ESP and Matrix clients read the shared cache.
+* Normal settings reads are RAM-only. `POST /refresh` explicitly rebuilds the complete cache from the DSP.
 * Old APIs use the default DSP. Multi-DSP APIs use `/api/v1/dsps/{id}/...`.
 
 Example additional DSPs:
@@ -699,10 +705,11 @@ muted unless the request explicitly uses `?unmuteSelected=true`.
 
 The Matrix integration is implemented in `dsp408-matrix`.
 
-It supports three usage modes:
+It supports four usage modes:
 
 * **control room** → full text commands
-* **volume room** → grouped input volume commands
+* **volume room** → simple grouped and individual level commands
+* **warning room** → read-only limiter alerts and warning on/off control
 * **machine room** → structured request/response events
 
 ### Matrix PID
@@ -720,13 +727,17 @@ de.drremote.dsp408controller.matrix
 | `access.token`         | bot access token                          |
 | `control.room.id`      | room for full `!dsp ...` control          |
 | `admin.room.id`        | deprecated fallback for `control.room.id` |
-| `volume.room.id`       | room for grouped input volume control     |
+| `volume.room.id`       | room for simple input/output level control|
+| `warning.room.id`      | read-only room for limiter warnings        |
 | `machine.room.id`      | room for structured machine events        |
 | `allowed.users`        | users allowed in control/volume rooms     |
 | `admin.users`          | admin users                               |
 | `machine.users`        | users allowed to send machine events      |
 | `sync.timeout.ms`      | Matrix sync timeout                       |
 | `reconnect.delay.ms`   | retry delay                               |
+| `limiter.warnings.enabled` | initial limiter warning state          |
+| `limiter.warning.poll.ms` | limiter meter polling interval          |
+| `limiter.warning.cooldown.ms` | active-warning reminder interval    |
 | `connect.dsp.on.start` | try to connect DSP on startup             |
 
 ### Example Matrix config
@@ -738,12 +749,16 @@ config:property-set matrix.url https://matrix.example.org
 config:property-set access.token syt_dummy_token
 config:property-set control.room.id '!controlroom:example.org'
 config:property-set volume.room.id '!volumeroom:example.org'
+config:property-set warning.room.id '!warningroom:example.org'
 config:property-set machine.room.id '!machineroom:example.org'
 config:property-set allowed.users @user1:example.org,@admin:example.org
 config:property-set admin.users @admin:example.org
 config:property-set machine.users @orchestrator:example.org
 config:property-set sync.timeout.ms 30000
 config:property-set reconnect.delay.ms 3000
+config:property-set limiter.warnings.enabled true
+config:property-set limiter.warning.poll.ms 1000
+config:property-set limiter.warning.cooldown.ms 15000
 config:property-set connect.dsp.on.start true
 config:update
 ```
@@ -799,14 +814,38 @@ Commands must start with:
 
 ## Matrix Volume Room
 
-The volume room is designed for grouped control of the four input channels:
-
-* `InA`
-* `InB`
-* `InC`
-* `InD`
+The volume room is designed for fast level control without a command prefix.
+Unknown chat messages are ignored. `in` addresses `InA..InD`, `out` addresses
+`Out1..Out8`, and every channel can also be addressed individually.
 
 ### Supported commands
+
+```text
+in +
+in -
+out +
+out -
+ina -20
+inb +
+out1 -10
+out5 -
+in mute
+out unmute
+out1 mute
+out1 unmute
+status
+help
+```
+
+Fixed group values are explicit so that a number cannot accidentally flatten
+all relative channel offsets:
+
+```text
+in set -20
+out set -20
+```
+
+The previous syntax remains available:
 
 ```text
 !dsp volume help
@@ -825,18 +864,37 @@ The volume room is designed for grouped control of the four input channels:
 
 ### Behavior
 
-* `status` shows the current known state of `InA..InD`
+* `status` shows the current known state of all inputs and outputs
 * `refresh` scans blocks and refreshes the current values
-* `up` / `down` use `volume.step.db`
-* `step` applies an explicit delta to all four inputs
-* `set` sets all four inputs to the same target gain
-* `mute` / `unmute` affect all four inputs
+* `+` / `-` use `volume.step.db` and preserve relative channel offsets
+* `step` applies an explicit delta to the selected group or channel
+* `set` sets the selected group to the same target gain
+* `mute` / `unmute` affect the selected group or channel
+* legacy commands without a target continue to address all four inputs
 
 ### Important details
 
 * the volume room does **not** establish a DSP connection by itself
 * if gains are not known yet, it triggers a refresh/scan first
 * after operations, it scans blocks again so the state is confirmed from device data
+
+---
+
+## Matrix Limiter Warning Room
+
+The limiter warning room is read-only with respect to the DSP. It polls the
+confirmed live limiter flags for all eight outputs and sends concise warnings,
+15-second reminders while limiting continues, and an all-clear message.
+
+```text
+warnungen an
+warnungen aus
+status
+help
+```
+
+The enabled state is stored in Matrix room state and survives bot restarts.
+Normal chat and `!dsp` commands are ignored in this room.
 
 ---
 
@@ -1176,7 +1234,7 @@ The current implementation is intentionally focused on:
 * gain, mute, phase/polarity, delay and limiter writes
 * crossover HP/LP editing
 * routing and matrix crosspoint editing
-* input/output PEQ writes and partial read-backed state
+* complete FIR408 input/output PEQ value and bypass readback, state-preserving writes, and a preflighted 104-band bypass command
 * FIR408 mode, generator and external FIR upload commands
 * DSP408 and FIR408 protocol library selection
 * single-DSP and multi-DSP access over shell / Matrix / HTTP
@@ -1187,7 +1245,6 @@ The current implementation is intentionally focused on:
 Still incomplete in the current codebase:
 
 * full semantic decode of every byte in every parameter block
-* complete PEQ readback/state coverage for every PEQ field and variant
 * a complete high-level DSP editor UI
 * end-to-end operation tests with multiple physical DSPs at different IPs
 
