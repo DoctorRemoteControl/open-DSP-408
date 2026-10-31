@@ -4,6 +4,7 @@
     <feature name="dsp408-runtime" version="${project.version}">
         <feature>scr</feature>
         <bundle>mvn:de.drremote/dsp408-api/${project.version}</bundle>
+        <bundle>mvn:de.drremote/dsp408-protocol/${dsp408.protocol.version}</bundle>
         <bundle>mvn:de.drremote/dsp408-core/${project.version}</bundle>
         <bundle>mvn:de.drremote/dsp408-runtime/${project.version}</bundle>
     </feature>

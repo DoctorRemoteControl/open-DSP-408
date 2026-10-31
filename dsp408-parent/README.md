@@ -1,5 +1,9 @@
 # DSP408Controller
 
+Build with `mvn verify` from the DSP408 workspace root, or install
+`../../dsp408-protocol` locally before building this parent alone. The runtime
+feature includes the shared protocol bundle required by `dsp408-core`.
+
 DSP408Controller is a Java 21 multi-module project for controlling and inspecting **t.racks / Thomann DSP 408** and **FIR408** devices over TCP.
 
 The project is built around an **Apache Karaf / OSGi** runtime and currently includes:
