@@ -148,6 +148,7 @@ class DspControllerTransportTimingTest {
     @Test
     void blockReadsFollowCorrelatedResponsesWithoutFixedQuietDelay() throws Exception {
         try (ServerSocket server = new ServerSocket(0)) {
+            CountDownLatch checked = new CountDownLatch(1);
             AtomicLong handshakeToFirstBlockMs = new AtomicLong();
             AtomicLong firstToSecondBlockMs = new AtomicLong();
 
@@ -168,6 +169,9 @@ class DspControllerTransportTimingTest {
                     firstToSecondBlockMs.set(elapsedMillis(firstReplyAt));
                     assertBlockRequest(second, 1);
                     write(output, blockReply(1));
+                    // This test measures response pacing, so keep the peer alive
+                    // until the caller has consumed the final exchange.
+                    assertTrue(checked.await(2, TimeUnit.SECONDS));
                 } catch (Exception error) {
                     throw new RuntimeException(error);
                 }
@@ -178,8 +182,10 @@ class DspControllerTransportTimingTest {
                 controller.setPreferredLibraryType("fir408");
                 controller.connect(config(server), ignored -> { });
                 controller.scanParameterBlocks(List.of(0, 1));
+                checked.countDown();
                 fakeDsp.get(2, TimeUnit.SECONDS);
             } finally {
+                checked.countDown();
                 controller.close();
             }
 
