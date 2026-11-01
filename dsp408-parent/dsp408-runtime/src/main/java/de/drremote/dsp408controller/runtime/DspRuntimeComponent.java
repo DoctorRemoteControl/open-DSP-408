@@ -265,7 +265,15 @@ public final class DspRuntimeComponent implements DspService {
 
     @Override
     public ParameterWriteResultDto writeParameter(ParameterWriteRequestDto request) {
-        ParameterWriteResultDto result = parameterWrites.write(request);
+        return recordParameterWrite(parameterWrites.write(request));
+    }
+
+    @Override
+    public ParameterWriteResultDto writeParameterInteractive(ParameterWriteRequestDto request) {
+        return recordParameterWrite(parameterWrites.writeInteractive(request));
+    }
+
+    private ParameterWriteResultDto recordParameterWrite(ParameterWriteResultDto result) {
         if (result.status() != ParameterWriteStatus.REJECTED) {
             autoLimit.invalidateUndo();
             if (controller.isConnected()) {

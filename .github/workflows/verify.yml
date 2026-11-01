@@ -46,6 +46,19 @@ jobs:
           java-version: '21'
           overwrite-settings: false
 
+      - name: Set up Node for browser checks
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+
+      - name: Verify browser model and interface
+        working-directory: open-DSP-408
+        run: |
+          npm ci --ignore-scripts
+          npm run test:web
+          npx playwright-core install chromium
+          npm run test:browser
+
       - name: Verify checkout validation and provenance
         run: python3 open-DSP-408/ci/test_verify.py
 
@@ -70,3 +83,4 @@ jobs:
           python3 open-DSP-408/integration/karaf-smoke.py
           --maven-repo "${{ runner.temp }}/dsp408-m2"
           --state-dir "${{ runner.temp }}/dsp408-karaf-smoke"
+          --browser-check

@@ -13,4 +13,8 @@ public interface DspParameterApi extends DspConnectionApi {
     default ParameterWriteResultDto writeParameter(ParameterWriteRequestDto request) throws Exception {
         throw new UnsupportedOperationException("This provider does not support parameter writes.");
     }
+    /** Opt-in bounded admission; older providers must never fall back to a blocking write. */
+    default ParameterWriteResultDto writeParameterInteractive(ParameterWriteRequestDto request) throws Exception {
+        throw new UnsupportedOperationException("This provider does not support interactive parameter writes.");
+    }
 }

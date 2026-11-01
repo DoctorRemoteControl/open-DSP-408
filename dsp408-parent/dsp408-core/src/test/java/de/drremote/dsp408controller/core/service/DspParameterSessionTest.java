@@ -154,8 +154,9 @@ class DspParameterSessionTest {
         }
     }
 
-    @Test
-    void knownAckSurvivesLostCurrentGuardWithoutPublishingIntoNewState() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void knownAckSurvivesLostCurrentGuardWithoutPublishingIntoNewState(boolean interactive) throws Exception {
         try (Peer peer = new Peer((input, output) -> {
             assertEquals(0x34, read(input)[3] & 255);
             write(output, new byte[]{1, 0, 1, 1});
@@ -169,7 +170,7 @@ class DspParameterSessionTest {
                         action.run();
                         return true;
                     });
-            assertDoesNotThrow(() -> session.write(DspChannel.IN_A, DspParameter.GAIN, -6.0));
+            assertDoesNotThrow(() -> writeSession(session, DspChannel.IN_A, DspParameter.GAIN, -6.0, interactive));
             assertEquals(3, controller.state().channel(DspChannel.IN_A).gainDb());
             assertFalse(session.isCurrent());
         }
@@ -229,8 +230,9 @@ class DspParameterSessionTest {
         }
     }
 
-    @Test
-    void closeDoesNotWaitForSessionIoAndOldSessionCannotUseAReplacement() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void closeDoesNotWaitForSessionIoAndOldSessionCannotUseAReplacement(boolean interactive) throws Exception {
         CountDownLatch readStarted = new CountDownLatch(1);
         try (Peer first = new Peer((input, output) -> {
             assertEquals(0x27, read(input)[3] & 255);
@@ -240,7 +242,7 @@ class DspParameterSessionTest {
             DspController controller = first.connect();
             DspParameterSession session = controller.openParameterSession();
             CompletableFuture<Void> read = CompletableFuture.runAsync(() ->
-                    assertThrows(IOException.class, () -> session.readBack(DspChannel.IN_A, DspParameter.GAIN)));
+                    assertThrows(IOException.class, () -> readSession(session, DspChannel.IN_A, DspParameter.GAIN, interactive)));
             assertTrue(readStarted.await(1, TimeUnit.SECONDS));
             assertTimeoutPreemptively(Duration.ofMillis(300), controller::close);
             read.get(1, TimeUnit.SECONDS);
@@ -251,14 +253,15 @@ class DspParameterSessionTest {
                 replacement.connect(controller);
                 assertTrue(controller.isConnected());
                 assertFalse(session.isCurrent());
-                assertThrows(IOException.class, () -> session.write(DspChannel.IN_A, DspParameter.GAIN, -6.0));
-                assertThrows(IOException.class, () -> session.readBack(DspChannel.IN_A, DspParameter.GAIN));
+                assertThrows(IOException.class, () -> writeSession(session, DspChannel.IN_A, DspParameter.GAIN, -6.0, interactive));
+                assertThrows(IOException.class, () -> readSession(session, DspChannel.IN_A, DspParameter.GAIN, interactive));
             }
         }
     }
 
-    @Test
-    void acknowledgementPublishesNormalizedGainWithoutInventingAReceiveRevision() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void acknowledgementPublishesNormalizedGainWithoutInventingAReceiveRevision(boolean interactive) throws Exception {
         try (Peer peer = new Peer((input, output) -> {
             assertArrayEquals(new byte[]{0, 1, 4, 0x34, 0, 80, 0}, read(input));
             write(output, new byte[]{1, 0, 1, 1});
@@ -266,11 +269,22 @@ class DspParameterSessionTest {
             DspController controller = peer.connect();
             controller.state().storeBlock(2, new byte[50]);
             long revision = controller.state().blockRevision(2);
-            controller.openParameterSession().write(DspChannel.IN_A, DspParameter.GAIN, -20.24);
+            writeSession(controller.openParameterSession(), DspChannel.IN_A, DspParameter.GAIN, -20.24, interactive);
             assertEquals(-20.0, controller.state().channel(DspChannel.IN_A).gainDb());
             assertFalse(controller.state().channel(DspChannel.IN_A).gainConfirmedFromDevice());
             assertEquals(revision, controller.state().blockRevision(2));
         }
+    }
+
+    private static void writeSession(DspParameterSession session, DspChannel channel,
+            DspParameter parameter, Object value, boolean interactive) throws IOException {
+        if (interactive) session.writeInteractive(channel, parameter, value);
+        else session.write(channel, parameter, value);
+    }
+
+    private static DspParameterReading readSession(DspParameterSession session, DspChannel channel,
+            DspParameter parameter, boolean interactive) throws IOException {
+        return interactive ? session.readBackInteractive(channel, parameter) : session.readBack(channel, parameter);
     }
 
     private static DspClient client(DspController controller) throws Exception {

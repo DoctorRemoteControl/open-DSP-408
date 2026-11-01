@@ -516,6 +516,11 @@ public final class DspClient implements Closeable {
 		return commandDispatcher.send(payload);
     }
 
+    /** Reserves the next exchange or rejects definitely before transmission. */
+    public boolean sendPayloadInteractive(byte[] payload) throws IOException {
+        return commandDispatcher.sendInteractive(payload);
+    }
+
     public DspTrafficSnapshot trafficSnapshot() {
 		return commandDispatcher.trafficSnapshot(
 				backgroundTasks.isMeterPolling(),

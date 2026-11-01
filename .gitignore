@@ -34,3 +34,6 @@ Thumbs.db
 # Python integration tooling
 __pycache__/
 *.py[cod]
+
+# Browser development/test dependencies
+node_modules/

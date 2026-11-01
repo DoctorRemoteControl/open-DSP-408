@@ -5,6 +5,8 @@ reactor is in [`dsp408-parent`](dsp408-parent/README.md); it contains the core
 protocol client, runtime service, shell, HTTP API, Matrix integration and Karaf
 features.
 
+The HTTP feature includes the [mobile LAN browser controller](docs/MOBILE-LAN-APP.md) at `/app/`.
+
 ## Build and test
 
 Use Java 21, Maven, Git, Bash and Python 3. This independent checkout builds
@@ -57,6 +59,8 @@ do not contact the physical DSP. In the complete local DSP408 workspace,
 
 ## Documentation
 
+- [Mobile LAN controller](docs/MOBILE-LAN-APP.md)
+- [Control latency and network-fault evidence](docs/LATENCY-VALIDATION.md)
 - [Firmware-aware parameter API](docs/PARAMETER-API.md)
 - [Queue capacity and overload](docs/QUEUE-OVERLOAD.md)
 - [Read-only hardware validation](docs/HARDWARE-VALIDATION.md)

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101614">
+  <meta name="color-scheme" content="dark">
+  <title>DSP Raider — Signal control</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.mjs"></script>
+</head>
+<body>
+  <a class="skip-link" href="#channels">Skip to channels</a>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="DSP Raider home"><img src="./icon.svg" width="34" height="34" alt=""><span>DSP<span class="brand-light">RAIDER</span><small>NETWORK AUDIO CONTROL</small></span></a>
+    <span class="connection-pill" id="server-status">Connecting to server</span>
+  </header>
+  <main>
+    <section class="workspace-heading" aria-labelledby="page-title">
+      <div><p class="eyebrow">YOUR NETWORK. YOUR SOUND.</p><h1 id="page-title">Signal control<span class="accent">.</span></h1><p class="intro">Every channel, right where you need it.</p></div>
+      <div class="channel-count"><strong id="channel-count">—</strong><span>CHANNELS</span></div>
+    </section>
+    <section class="device-panel" aria-label="Processor connection">
+      <div class="device-picker"><label for="device-select">PROCESSOR</label><select id="device-select" disabled><option>Loading devices…</option></select><span id="device-address" class="mono">Waiting for server</span></div>
+      <div class="device-facts"><div><span>DEVICE</span><strong id="device-status">Unknown</strong></div><div><span>FIRMWARE</span><strong id="firmware">—</strong></div><div><span>SNAPSHOT</span><strong id="snapshot-status">—</strong></div></div>
+      <div class="connection-actions"><button id="connection-button" class="button primary" disabled>Connect</button><button id="refresh-button" class="button secondary" disabled><span aria-hidden="true">↻</span> Refresh</button></div>
+    </section>
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+    <div id="cache-note" class="cache-note" hidden></div>
+    <section class="controls-toolbar" aria-label="Channel view and verification">
+      <div class="view-tabs" role="group" aria-label="Channel group"><button data-filter="all" aria-pressed="true">All channels</button><button data-filter="inputs" aria-pressed="false">Inputs</button><button data-filter="outputs" aria-pressed="false">Outputs</button></div>
+      <details class="verification"><summary>Verification settings</summary><label><input type="checkbox" id="verify-changes"> Read back after every change</label><p>Optional and slower. Normal controls wait only for the device ACK. Enable this to verify each change; controls without a confirmed mapping will be disabled.</p></details>
+    </section>
+    <div id="empty-state" class="empty-state"><span class="empty-mark" aria-hidden="true">≋</span><h2 id="empty-title">Finding your processors</h2><p id="empty-description">Connecting to the DSP server. No device settings are changed.</p><button id="retry-button" class="button secondary" hidden>Retry server</button></div>
+    <div id="channels" class="channel-groups" aria-label="DSP channels"></div>
+    <footer><span class="footer-mark" aria-hidden="true">●</span><span id="footer-status">Local network control</span><span id="timing-status" class="footer-timing mono"></span><span class="footer-note">Changes are sent only when you use a control.</span></footer>
+    <noscript><p class="notice">JavaScript is required for device control. No commands are sent while it is disabled.</p></noscript>
+  </main>
+  <template id="channel-template">
+    <article class="channel-card">
+      <header class="card-header"><div><span class="channel-index mono"></span><h3 class="channel-name"></h3></div><span class="channel-kind"></span></header>
+      <div class="meter-section"><div class="meter-heading"><span>LEVEL</span><output class="meter-number mono">— dB</output></div><meter class="level-meter" min="-60" max="12" low="-12" high="0" optimum="-24" value="-60"></meter><div class="meter-scale mono"><span>−60</span><span>−24</span><span>0</span><span>+12</span></div><span class="meter-state">Awaiting confirmed level</span></div>
+      <div class="gain-section"><div class="control-heading"><label class="gain-label">Gain</label><output class="gain-value mono">— dB</output></div><input class="gain-slider" type="range" min="-60" max="12" step="any" value="-60" disabled><div class="gain-meta"><span>−60 dB</span><span class="gain-evidence">Unknown</span><span>+12 dB</span></div></div>
+      <div class="switches"><button type="button" class="mute-toggle" aria-pressed="false" disabled>Mute</button><button type="button" class="phase-toggle" aria-pressed="false" disabled>Phase 0°</button></div>
+      <form class="delay-form"><label class="delay-label">Delay <span>ms</span><input class="delay-input mono" type="number" inputmode="decimal" min="0" max="680" step="any" placeholder="—" disabled></label><button type="submit" class="delay-apply" disabled>Apply</button></form>
+      <p class="card-feedback">Waiting for device state</p>
+    </article>
+  </template>
+</body>
+</html>

@@ -53,7 +53,7 @@
           "parameters"
         ],
         "summary": "Write one parameter with an explicit acknowledgement/readback outcome",
-        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes.",
+        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes. Normal browser control explicitly sets verify=false. Prefer: wait=0 requests interactive admission. Idempotency-Key protects transport duplicates within this process and retention window. Explicit foreign-Origin browser writes return 403.",
         "requestBody": {
           "$ref": "#/components/requestBodies/ParameterWriteBody"
         },
@@ -75,8 +75,19 @@
           },
           "503": {
             "$ref": "#/components/responses/ParameterWriteOverloadedResponse"
+          },
+          "403": {
+            "description": "The browser Origin does not match the directly served DSP server origin."
           }
-        }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/interactivePreference"
+          },
+          {
+            "$ref": "#/components/parameters/parameterRequestKey"
+          }
+        ]
       }
     },
     "/api/v1/dsps/{dspId}/capabilities": {
@@ -104,7 +115,7 @@
           "parameters"
         ],
         "summary": "Write one parameter with an explicit acknowledgement/readback outcome",
-        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes.",
+        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes. Normal browser control explicitly sets verify=false. Prefer: wait=0 requests interactive admission. Idempotency-Key protects transport duplicates within this process and retention window. Explicit foreign-Origin browser writes return 403.",
         "requestBody": {
           "$ref": "#/components/requestBodies/ParameterWriteBody"
         },
@@ -126,11 +137,20 @@
           },
           "503": {
             "$ref": "#/components/responses/ParameterWriteOverloadedResponse"
+          },
+          "403": {
+            "description": "The browser Origin does not match the directly served DSP server origin."
           }
         },
         "parameters": [
           {
             "$ref": "#/components/parameters/dspId"
+          },
+          {
+            "$ref": "#/components/parameters/interactivePreference"
+          },
+          {
+            "$ref": "#/components/parameters/parameterRequestKey"
           }
         ]
       }
@@ -250,7 +270,29 @@
       "peqIndex": {"name": "peqIndex", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 9}},
       "blockIndex": {"name": "blockIndex", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^(0x)?[0-9A-Fa-f]{1,2}$"}},
       "unmuteSelected": {"name": "unmuteSelected", "in": "query", "required": false, "schema": {"type": "boolean", "default": false}, "description": "Only when true are channels marked unmuteAfterApply=true unmuted after a fully successful apply."},
-      "refreshPreset": {"name": "refresh", "in": "query", "required": false, "schema": {"type": "boolean", "default": true}, "description": "Scan parameter blocks after writes and before optional unmute."}
+      "refreshPreset": {"name": "refresh", "in": "query", "required": false, "schema": {"type": "boolean", "default": true}, "description": "Scan parameter blocks after writes and before optional unmute."},
+      "interactivePreference": {
+        "name": "Prefer",
+        "in": "header",
+        "required": false,
+        "description": "wait=0 requests interactive admission: reject a busy transaction/control queue before transmission; one already-started short meter/keepalive may finish. Existing queued behavior is preserved without this preference.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "wait=0"
+      },
+      "parameterRequestKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "description": "Process-local duplicate delivery protection. Same key/body/target reuses the result or exception. Up to 4096 entries; completed entries expire after two minutes, active entries do not expire. Restart ends protection. Changed body/target conflicts.",
+        "schema": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._~-]+$"
+        }
+      }
     },
     "requestBodies": {
       "ParameterWriteBody": {
@@ -381,6 +423,15 @@
               }
             }
           }
+        },
+        "headers": {
+          "Server-Timing": {
+            "description": "Monotonic backend handler/cache/service time for this HTTP attempt, including queue and DSP work; not DSP-only processing or pure Wi-Fi latency.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "backend;dur=62.400"
+          }
         }
       },
       "ParameterWriteInvalidJsonResponse": {
@@ -395,6 +446,15 @@
               "message": "Request body is not valid JSON.",
               "status": 400
             }
+          }
+        },
+        "headers": {
+          "Server-Timing": {
+            "description": "Monotonic backend handler/cache/service time for this HTTP attempt, including queue and DSP work; not DSP-only processing or pure Wi-Fi latency.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "backend;dur=62.400"
           }
         }
       },
@@ -471,6 +531,15 @@
               }
             }
           }
+        },
+        "headers": {
+          "Server-Timing": {
+            "description": "Monotonic backend handler/cache/service time for this HTTP attempt, including queue and DSP work; not DSP-only processing or pure Wi-Fi latency.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "backend;dur=62.400"
+          }
         }
       },
       "ParameterWriteInvalidInputResponse": {
@@ -487,6 +556,15 @@
                 }
               ]
             }
+          }
+        },
+        "headers": {
+          "Server-Timing": {
+            "description": "Monotonic backend handler/cache/service time for this HTTP attempt, including queue and DSP work; not DSP-only processing or pure Wi-Fi latency.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "backend;dur=62.400"
           }
         }
       },
@@ -516,6 +594,15 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "Server-Timing": {
+            "description": "Monotonic backend handler/cache/service time for this HTTP attempt, including queue and DSP work; not DSP-only processing or pure Wi-Fi latency.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "backend;dur=62.400"
           }
         }
       },
@@ -562,6 +649,15 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "Server-Timing": {
+            "description": "Monotonic backend handler/cache/service time for this HTTP attempt, including queue and DSP work; not DSP-only processing or pure Wi-Fi latency.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "backend;dur=62.400"
           }
         }
       },

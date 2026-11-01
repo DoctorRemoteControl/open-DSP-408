@@ -44,6 +44,140 @@ import de.drremote.dsp408controller.core.service.DspController;
 @Timeout(15)
 class DspParameterWritesTest {
     @Test
+    void interactiveRejectsHeldRuntimeTransactionWithoutPausingMeters() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (Peer peer = new Peer("FIR408 V0113P", DspParameterWritesTest::assertNoRequest);
+                ExecutorService callers = Executors.newVirtualThreadPerTaskExecutor()) {
+            peer.controller.startMeterPolling(60_000);
+            var coordinator = new DspTransactionCoordinator(peer.controller, () -> peer.controller.startMeterPolling(60_000));
+            var writer = new DspParameterWrites(peer.controller, coordinator, () -> "test-dsp");
+            var held = callers.submit(() -> coordinator.withMetersPaused(() -> {
+                entered.countDown();
+                assertTrue(release.await(2, TimeUnit.SECONDS));
+                return null;
+            }));
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            try {
+                var result = callers.submit(() -> interactive(writer, false)).get(250, TimeUnit.MILLISECONDS);
+                assertRejected(result, "dsp_busy");
+                assertFalse(peer.controller.trafficSnapshot().centralMeterPolling());
+                assertEquals(0, peer.controller.trafficSnapshot().pendingCommands());
+            } finally { release.countDown(); }
+            held.get(1, TimeUnit.SECONDS);
+            assertTrue(peer.controller.trafficSnapshot().centralMeterPolling());
+            peer.awaitScript();
+        }
+    }
+
+    @Test
+    void interactiveAckOnlySendsNoParameterReadback() throws Exception {
+        try (Peer peer = new Peer("FIR408 V0113P", (socket, input, output) -> {
+            assertControl(read(input), 0x34, 11, 157);
+            ack(output);
+            assertNoRequest(socket, input, output);
+        })) {
+            var result = interactive(peer.writer(), false);
+            assertEquals(ParameterWriteStatus.ACKNOWLEDGED, result.status());
+            assertEquals(Boolean.TRUE, result.transmitted());
+            assertNull(result.readback());
+            peer.awaitScript();
+        }
+    }
+
+    @Test
+    void interactiveRejectsActiveAndPendingSlowWireWork() throws Exception {
+        CountDownLatch active = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (Peer peer = new Peer("FIR408 V0113P", (socket, input, output) -> {
+            assertEquals(0x21, command(read(input)));
+            active.countDown();
+            assertTrue(release.await(3, TimeUnit.SECONDS));
+            ack(output);
+            assertEquals(0x3D, command(read(input)));
+            ack(output);
+            assertNoRequest(socket, input, output);
+        }); ExecutorService callers = Executors.newVirtualThreadPerTaskExecutor()) {
+            var held = callers.submit(() -> { peer.controller.storePreset(1); return null; });
+            assertTrue(active.await(1, TimeUnit.SECONDS));
+            try {
+                assertRejected(callers.submit(() -> interactive(peer.writer(), false)).get(250, TimeUnit.MILLISECONDS), "dsp_busy");
+                fill(callers, peer.controller, 1);
+                await(() -> peer.controller.trafficSnapshot().pendingCommands() == 1);
+                assertRejected(callers.submit(() -> interactive(peer.writer(), false)).get(250, TimeUnit.MILLISECONDS), "dsp_busy");
+                assertTrue(peer.controller.isConnected());
+            } finally { release.countDown(); }
+            held.get(1, TimeUnit.SECONDS);
+            peer.awaitScript();
+        }
+    }
+
+    @Test
+    void interactiveWaitsForSingleMeterExchangeThenAcknowledges() throws Exception {
+        for (boolean meter : new boolean[]{true}) {
+            CountDownLatch active = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            try (Peer peer = new Peer("FIR408 V0113P", (socket, input, output) -> {
+                assertEquals(meter ? 0x40 : 0x12, command(read(input)));
+                active.countDown();
+                assertTrue(release.await(1, TimeUnit.SECONDS));
+                if (meter) send(output, new byte[]{1, 0, 1, 0x40}); else ack(output);
+                assertControl(read(input), 0x34, 11, 157);
+                ack(output);
+                assertNoRequest(socket, input, output);
+            }); ExecutorService callers = Executors.newVirtualThreadPerTaskExecutor()) {
+                var background = callers.submit(() -> {
+                    if (meter) peer.controller.requestRuntimeMeters(); else peer.controller.sendKeepAlive();
+                    return null;
+                });
+                assertTrue(active.await(1, TimeUnit.SECONDS));
+                var write = callers.submit(() -> interactive(peer.writer(), false));
+                try { await(() -> peer.controller.trafficSnapshot().pendingCommands() == 1); }
+                finally { release.countDown(); }
+                assertEquals(ParameterWriteStatus.ACKNOWLEDGED, write.get(1, TimeUnit.SECONDS).status());
+                background.get(1, TimeUnit.SECONDS);
+                peer.awaitScript();
+            }
+        }
+    }
+
+    @Test
+    void interactiveReadbackBusyAfterAckIsUncertainWithKnownTransmission() throws Exception {
+        CountDownLatch written = new CountDownLatch(1);
+        CountDownLatch sendAck = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (Peer peer = new Peer("FIR408 V0113P", (socket, input, output) -> {
+            assertControl(read(input), 0x34, 11, 157);
+            written.countDown();
+            assertTrue(sendAck.await(1, TimeUnit.SECONDS));
+            ack(output);
+            assertEquals(0x3D, command(read(input)));
+            assertTrue(release.await(1, TimeUnit.SECONDS));
+            ack(output);
+            assertNoRequest(socket, input, output);
+        }); ExecutorService callers = Executors.newVirtualThreadPerTaskExecutor()) {
+            var write = callers.submit(() -> interactive(peer.writer(), true));
+            assertTrue(written.await(1, TimeUnit.SECONDS));
+            fill(callers, peer.controller, 1);
+            await(() -> peer.controller.trafficSnapshot().pendingCommands() == 1);
+            try {
+                sendAck.countDown();
+                var result = write.get(500, TimeUnit.MILLISECONDS);
+                assertEquals(ParameterWriteStatus.UNCERTAIN, result.status());
+                assertEquals("dsp_busy", result.errorCode());
+                assertTrue(result.acknowledged());
+                assertEquals(Boolean.TRUE, result.transmitted());
+                assertNull(result.readback());
+            } finally { sendAck.countDown(); release.countDown(); }
+            peer.awaitScript();
+        }
+    }
+
+    private static ParameterWriteResultDto interactive(DspParameterWrites writer, boolean verify) throws Exception {
+        return writer.writeInteractive(new ParameterWriteRequestDto("out8", "gain", -12.3, verify));
+    }
+
+    @Test
     void disconnectedWriteIsRejectedBeforeEffects() {
         DspController controller = new DspController();
         ParameterWriteResultDto result = writes(controller).write(
@@ -200,13 +334,14 @@ class DspParameterWritesTest {
         }
     }
 
-    @Test
-    void missingAckIsUncertainAndNeverReplaysTheWrite() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void missingAckIsUncertainAndNeverReplaysTheWrite(boolean interactive) throws Exception {
         try (Peer peer = new Peer("FIR408 V0113P", (socket, input, output) -> {
             assertControl(read(input), 0x34, 11, 157);
             assertThrows(EOFException.class, () -> DspFrameCodec.readFrame(input));
         })) {
-            ParameterWriteResultDto result = peer.writer().write(
+            ParameterWriteResultDto result = interactive ? interactive(peer.writer(), false) : peer.writer().write(
                     new ParameterWriteRequestDto("Out8", "gain", -12.3, false));
 
             assertEquals(ParameterWriteStatus.UNCERTAIN, result.status());
@@ -238,8 +373,9 @@ class DspParameterWritesTest {
         }
     }
 
-    @Test
-    void metersStayPausedAcrossBothTheWriteAndFreshReadback() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void metersStayPausedAcrossBothTheWriteAndFreshReadback(boolean interactive) throws Exception {
         AtomicReference<DspController> controller = new AtomicReference<>();
         try (Peer peer = new Peer("FIR408 V0113P", (socket, input, output) -> {
             assertControl(read(input), 0x34, 11, 157);
@@ -255,8 +391,8 @@ class DspParameterWritesTest {
                     new DspTransactionCoordinator(peer.controller, () -> peer.controller.startMeterPolling(60_000)),
                     () -> "test-dsp");
 
-            assertEquals(ParameterWriteStatus.VERIFIED, writer.write(
-                    new ParameterWriteRequestDto("Out8", "gain", -12.3)).status());
+            assertEquals(ParameterWriteStatus.VERIFIED, (interactive ? interactive(writer, true) : writer.write(
+                    new ParameterWriteRequestDto("Out8", "gain", -12.3))).status());
             assertTrue(peer.controller.trafficSnapshot().centralMeterPolling());
             peer.awaitScript();
         }
@@ -461,10 +597,10 @@ class DspParameterWritesTest {
                     waiting.add(thread);
                     thread.start();
                 }
-                // BLOCKED alone can mean UUID/SecureRandom initialization before
+                // A parked/blocked thread alone can mean initialization before
                 // admission. Require every producer to have acquired its permit
                 // and reached the actual shared transaction monitor.
-                await(() -> waiting.stream().allMatch(thread -> thread.getState() == Thread.State.BLOCKED
+                await(() -> waiting.stream().allMatch(thread -> (thread.getState() == Thread.State.BLOCKED || thread.getState() == Thread.State.WAITING)
                         && java.util.Arrays.stream(thread.getStackTrace()).anyMatch(frame ->
                         frame.getClassName().equals(DspTransactionCoordinator.class.getName())
                                 && frame.getMethodName().equals("withMetersPaused"))));
@@ -474,6 +610,7 @@ class DspParameterWritesTest {
                 ParameterWriteResultDto rejected = assertDoesNotThrow(() -> excess.get(1, TimeUnit.SECONDS),
                         "A full operation admission limit must reject without waiting for the legacy transaction");
                 assertRejected(rejected, "dsp_overloaded");
+                assertRejected(writer.writeInteractive(new ParameterWriteRequestDto("out8", "gain", -12.3, false)), "dsp_busy");
                 assertEquals("test-dsp", rejected.dspId());
                 assertEquals("out8", rejected.channelId());
                 assertEquals(0, peer.controller.trafficSnapshot().pendingCommands(),

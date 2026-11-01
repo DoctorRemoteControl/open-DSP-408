@@ -21,6 +21,85 @@ import org.junit.jupiter.api.Test;
 
 class DspCommandQueueTest {
     @Test
+    void interactiveRejectsPendingOrForegroundWorkBeforeTransmission() throws Exception {
+        for (DspCommandQueue.Priority priority : DspCommandQueue.Priority.values()) {
+            DspCommandQueue queue = openQueue();
+            queue.submit(new byte[]{1}, priority, null, false);
+            assertBusy(interactive(queue, new byte[]{2}, "gain:0"));
+            var active = queue.take();
+            queue.beginTransmission(active);
+            if (priority != DspCommandQueue.Priority.METER && priority != DspCommandQueue.Priority.KEEPALIVE) {
+                assertBusy(interactive(queue, new byte[]{2}, "gain:0"));
+            }
+            queue.complete(active, true);
+        }
+    }
+
+    @Test
+    void interactiveReservationFollowsOneBackgroundExchangeAndCannotBeOvertakenOrCoalesced() throws Exception {
+        for (DspCommandQueue.Priority background : List.of(DspCommandQueue.Priority.METER, DspCommandQueue.Priority.KEEPALIVE)) {
+            DspCommandQueue queue = openQueue();
+            queue.submit(new byte[]{1}, background, "background", false);
+            var active = queue.take();
+            queue.beginTransmission(active);
+            var reserved = interactive(queue, new byte[]{2}, "gain:0");
+            var old = queue.submit(new byte[]{3}, DspCommandQueue.Priority.CONTROL, "gain:0", true);
+            var newest = queue.submit(new byte[]{4}, DspCommandQueue.Priority.CONTROL, "gain:0", true);
+            queue.submit(new byte[]{5}, DspCommandQueue.Priority.SAFETY, null, true);
+            assertFalse(old.get());
+            assertFalse(reserved.isDone());
+            assertBusy(interactive(queue, new byte[]{6}, "gain:1"));
+            queue.complete(active, true);
+            var selected = queue.take();
+            assertSame(reserved, selected.completion());
+            // Taking the reservation must not remove the later same-key mapping.
+            var replacement = queue.submit(new byte[]{7}, DspCommandQueue.Priority.CONTROL, "gain:0", true);
+            assertFalse(newest.get());
+            queue.complete(selected, true);
+            assertTrue(reserved.get());
+            assertEquals(5, queue.take().payload()[0]);
+            assertFalse(replacement.isDone());
+        }
+    }
+
+    @Test
+    void interactiveReservationSurvivesSafetyDisplacementAndIsCancelledOnClose() throws Exception {
+        DspCommandQueue queue = openQueue();
+        var reserved = interactive(queue, new byte[]{1}, "gain:0");
+        for (int index = 0; index < 63; index++) queue.submit(new byte[]{2}, DspCommandQueue.Priority.READ, null, false);
+        queue.submit(new byte[]{3}, DspCommandQueue.Priority.SAFETY, null, true);
+        assertFalse(reserved.isDone());
+        assertSame(reserved, queue.take().completion());
+        queue.close(new java.io.IOException("closed"));
+        assertTrue(reserved.isCompletedExceptionally());
+    }
+
+    @Test
+    void interactiveReservationCancellationIsDefiniteOnlyBeforeTransmissionStarts() throws Exception {
+        DspCommandQueue queue = openQueue();
+        var reserved = interactive(queue, new byte[]{1}, "gain:0");
+        assertTrue(queue.cancel(reserved, new java.io.IOException("cancelled")));
+        assertTrue(reserved.isCompletedExceptionally());
+        assertEquals(0, queue.stats().pendingCommands());
+        var accepted = interactive(queue, new byte[]{2}, "gain:0");
+        var selected = queue.take();
+        assertTrue(queue.beginTransmission(selected));
+        assertFalse(queue.cancel(accepted, new java.io.IOException("too late")));
+        assertFalse(accepted.isDone());
+        queue.complete(selected, true);
+        assertTrue(accepted.get());
+    }
+
+    private static CompletableFuture<Boolean> interactive(DspCommandQueue queue, byte[] payload, String key) throws Exception {
+        return queue.submitInteractive(payload, DspCommandQueue.Priority.CONTROL, key, true);
+    }
+
+    private static void assertBusy(CompletableFuture<Boolean> future) {
+        var failure = assertThrows(CompletionException.class, future::join);
+        assertEquals("DspBusyException", failure.getCause().getClass().getSimpleName());
+    }
+
+    @Test
     void sixtyFifthPendingCommandFailsWithoutChangingTheQueue() throws Exception {
         DspCommandQueue queue = openQueue();
         var accepted = fill(queue, DspCommandQueue.Priority.CONTROL);

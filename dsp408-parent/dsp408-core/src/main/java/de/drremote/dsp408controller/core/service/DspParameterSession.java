@@ -34,6 +34,14 @@ public final class DspParameterSession {
 
     /** A normal return means an actual ACK. A later identity change only suppresses state publication. */
     public void write(DspChannel channel, DspParameter parameter, Object value) throws IOException {
+        write(channel, parameter, value, false);
+    }
+
+    public void writeInteractive(DspChannel channel, DspParameter parameter, Object value) throws IOException {
+        write(channel, parameter, value, true);
+    }
+
+    private void write(DspChannel channel, DspParameter parameter, Object value, boolean interactive) throws IOException {
         Object normalized = catalog.normalize(parameter, value);
         if (!catalog.capability(channel, parameter).writable()) {
             throw new UnsupportedDspOperationException("Parameter is not writable for this captured firmware profile");
@@ -41,10 +49,10 @@ public final class DspParameterSession {
         requireCurrent();
         try {
             switch (parameter) {
-                case GAIN -> send(DspProtocol.buildGain(channel.index(), (Double) normalized));
-                case MUTE -> send(DspProtocol.buildMute(channel.index(), (Boolean) normalized));
-                case PHASE -> send(DspProtocol.buildPhase(channel.index(), (Boolean) normalized));
-                case DELAY -> send(DspProtocol.buildDelay(channel.index(), (Double) normalized));
+                case GAIN -> send(DspProtocol.buildGain(channel.index(), (Double) normalized), interactive);
+                case MUTE -> send(DspProtocol.buildMute(channel.index(), (Boolean) normalized), interactive);
+                case PHASE -> send(DspProtocol.buildPhase(channel.index(), (Boolean) normalized), interactive);
+                case DELAY -> send(DspProtocol.buildDelay(channel.index(), (Double) normalized), interactive);
             }
         } catch (CancellationException superseded) {
             throw superseded;
@@ -55,6 +63,14 @@ public final class DspParameterSession {
     }
 
     public DspParameterReading readBack(DspChannel channel, DspParameter parameter) throws IOException {
+        return readBack(channel, parameter, false);
+    }
+
+    public DspParameterReading readBackInteractive(DspChannel channel, DspParameter parameter) throws IOException {
+        return readBack(channel, parameter, true);
+    }
+
+    private DspParameterReading readBack(DspChannel channel, DspParameter parameter, boolean interactive) throws IOException {
         if (!catalog.capability(channel, parameter).readbackSupported()) {
             throw new UnsupportedDspOperationException("Readback mapping is not confirmed for this captured firmware and channel");
         }
@@ -64,7 +80,13 @@ public final class DspParameterSession {
         long[] before = new long[1];
         if (!guard.run(() -> before[0] = state.blockRevision(block))) throw stale();
         try {
-            client.readParameterBlock(block);
+            if (interactive) {
+                if (!client.sendPayloadInteractive(DspProtocol.readParameterBlock(block))) {
+                    throw new IOException("DSP readback was cancelled before transmission");
+                }
+            } else {
+                client.readParameterBlock(block);
+            }
         } catch (IllegalStateException error) {
             throw new IOException("Captured DSP connection is no longer available", error);
         }
@@ -106,8 +128,9 @@ public final class DspParameterSession {
         };
     }
 
-    private void send(byte[] payload) throws IOException {
-        if (!client.sendPayload(payload)) throw new CancellationException("DSP write was superseded before transmission");
+    private void send(byte[] payload, boolean interactive) throws IOException {
+        boolean acknowledged = interactive ? client.sendPayloadInteractive(payload) : client.sendPayload(payload);
+        if (!acknowledged) throw new CancellationException("DSP write was superseded before transmission");
     }
 
     private void publishWrite(DspChannel channel, DspParameter parameter, Object value) {

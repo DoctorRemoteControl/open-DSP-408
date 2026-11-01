@@ -338,6 +338,7 @@ class DspApiServletParameterContractTest {
                 HttpServletRequest.class.getClassLoader(), new Class<?>[]{HttpServletRequest.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "getPathInfo" -> path;
+                    case "getHeader" -> null;
                     case "getContentLengthLong" -> (long) bytes.length;
                     case "getInputStream" -> stream;
                     default -> throw new AssertionError("Unexpected request method: " + method.getName());
@@ -361,6 +362,7 @@ class DspApiServletParameterContractTest {
                         case "setStatus" -> status = (int) args[0];
                         case "setContentType" -> contentType = (String) args[0];
                         case "setCharacterEncoding" -> encoding = (String) args[0];
+                        case "setHeader" -> { }
                         case "getOutputStream" -> { return output; }
                         default -> throw new AssertionError("Unexpected response method: " + method.getName());
                     }

@@ -8,6 +8,20 @@ import org.junit.jupiter.api.Test;
 
 class ParameterApiContractTest {
     @Test
+    void olderProviderRejectsInteractiveRatherThanCallingLegacyWrite() throws Exception {
+        DspParameterApi older = new DspParameterApi() {
+            public String connect() { throw new AssertionError(); }
+            public String reconnect() { throw new AssertionError(); }
+            public void disconnect() { throw new AssertionError(); }
+            public boolean isConnected() { return false; }
+            public DeviceInfoDto getDeviceInfo() { return null; }
+            public ParameterWriteResultDto writeParameter(ParameterWriteRequestDto request) { throw new AssertionError("Must not call the blocking provider"); }
+        };
+        assertThrows(UnsupportedOperationException.class,
+                () -> older.writeParameterInteractive(new ParameterWriteRequestDto("out8", "gain", -14.0, false)));
+    }
+
+    @Test
     void capabilitiesOwnTheirNestedLists() {
         List<ParameterCapabilityDto> parameters = new ArrayList<>();
         ChannelCapabilitiesDto channel = new ChannelCapabilitiesDto("ina", "InA", 0, parameters);

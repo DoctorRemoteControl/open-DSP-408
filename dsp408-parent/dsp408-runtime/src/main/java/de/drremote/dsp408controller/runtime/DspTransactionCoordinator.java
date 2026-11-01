@@ -1,6 +1,8 @@
 package de.drremote.dsp408controller.runtime;
 
 import java.util.Locale;
+import java.util.concurrent.locks.ReentrantLock;
+import de.drremote.dsp408controller.core.net.DspBusyException;
 
 import de.drremote.dsp408controller.core.net.DspTrafficSnapshot;
 import de.drremote.dsp408controller.core.service.DspController;
@@ -18,7 +20,7 @@ final class DspTransactionCoordinator {
 
     private final DspController controller;
     private final Runnable meterPollingStarter;
-    private final Object transactionLock = new Object();
+    private final ReentrantLock transactionLock = new ReentrantLock();
 
     DspTransactionCoordinator(DspController controller,
                               Runnable meterPollingStarter) {
@@ -27,28 +29,46 @@ final class DspTransactionCoordinator {
     }
 
     <T> T withMetersPaused(CheckedSupplier<T> action) throws Exception {
-        synchronized (transactionLock) {
-            DspTrafficSnapshot before = controller.trafficSnapshot();
-            boolean resumeMeterPolling = before.centralMeterPolling();
-            if (resumeMeterPolling) {
-                try {
-                    controller.stopMeterPolling();
-                } catch (DspNotConnectedException disconnected) {
-                    // A concurrent close already stopped this session's tasks.
-                    // Let the operation perform its own connection preflight.
-                }
-            }
+        transactionLock.lock();
+        try {
+            return executeWithMetersPaused(action);
+        } finally {
+            transactionLock.unlock();
+        }
+    }
 
+    <T> T withMetersPausedInteractive(CheckedSupplier<T> action) throws Exception {
+        if (!transactionLock.tryLock()) {
+            throw new DspBusyException("Another DSP transaction is in progress.");
+        }
+        try {
+            return executeWithMetersPaused(action);
+        } finally {
+            transactionLock.unlock();
+        }
+    }
+
+    private <T> T executeWithMetersPaused(CheckedSupplier<T> action) throws Exception {
+        DspTrafficSnapshot before = controller.trafficSnapshot();
+        boolean resumeMeterPolling = before.centralMeterPolling();
+        if (resumeMeterPolling) {
             try {
-                return action.get();
-            } finally {
-                if (resumeMeterPolling && controller.isConnected()) {
-                    try {
-                        meterPollingStarter.run();
-                    } catch (DspNotConnectedException disconnected) {
-                        // Disconnect after the connectivity check is expected
-                        // cleanup, and must not replace an ACK or I/O failure.
-                    }
+                controller.stopMeterPolling();
+            } catch (DspNotConnectedException disconnected) {
+                // A concurrent close already stopped this session's tasks.
+                // Let the operation perform its own connection preflight.
+            }
+        }
+
+        try {
+            return action.get();
+        } finally {
+            if (resumeMeterPolling && controller.isConnected()) {
+                try {
+                    meterPollingStarter.run();
+                } catch (DspNotConnectedException disconnected) {
+                    // Disconnect after the connectivity check is expected
+                    // cleanup, and must not replace an ACK or I/O failure.
                 }
             }
         }

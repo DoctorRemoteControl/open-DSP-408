@@ -317,6 +317,7 @@ class DspApiServletPostContractTest {
                 HttpServletRequest.class.getClassLoader(), new Class<?>[]{HttpServletRequest.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "getPathInfo" -> path;
+                    case "getHeader" -> null;
                     case "getContentLengthLong" -> (long) bytes.length;
                     case "getInputStream" -> stream;
                     case "getParameter" -> query.get(args[0]);

@@ -136,3 +136,29 @@ parameter readbacks, rejected the 10 inferred mappings and preserved all 32
 configuration blocks byte-for-byte. See the [measured hardware check](HARDWARE-VALIDATION.md#parameter-api-readback-check-2026-11-01).
 The legacy Raider meter emulator is not a reference for this firmware or for
 parameter writes; no physical control write has been claimed as validated.
+
+## Interactive browser delivery
+
+`Prefer: wait=0` opts into `DspParameterApi.writeParameterInteractive`. It rejects
+busy runtime transactions or an occupied/pending control queue before sending
+(`dsp_busy`, HTTP 503, `REJECTED`, `transmitted=false`). A single already-transmitting
+meter/keepalive may finish first; the interactive next slot is reserved. An ACK
+followed by busy optional verification remains `UNCERTAIN` with known transmission.
+Older Java providers reject this method rather than silently using queued writes.
+Without the preference the existing write behavior is preserved.
+
+The browser explicitly chooses `verify:false` for normal control; the HTTP body
+default remains `verify:true` for compatibility. It measures response time using
+`Server-Timing: backend;dur=...` (handler/cache/service time, including device and
+queue time). The header is not a measurement of physical DSP processing alone.
+
+An optional `Idempotency-Key` of 16..128 safe ASCII token characters associates
+one body and device with its outcome or exception in this servlet process. Same-key
+transport repeats reuse that outcome and do not invoke the service again; a
+changed body/device conflicts. Calls without a key retain the original behavior.
+Request IDs in the result remain correlation IDs and are not deduplication keys.
+The cache retains up to 4096 entries; completed outcomes/failures expire two
+minutes after completion. Active entries never expire, and no guarantee
+continues across server restart or retention expiry. Capacity exhaustion returns
+503 before executing a new request. See the mobile controller document for its
+client recovery and latency-testing scope.

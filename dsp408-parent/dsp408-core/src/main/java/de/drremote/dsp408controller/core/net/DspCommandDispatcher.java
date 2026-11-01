@@ -71,6 +71,10 @@ final class DspCommandDispatcher implements DspPayloadTransport {
 		return enqueue(payload, false);
 	}
 
+    boolean sendInteractive(byte[] payload) throws IOException {
+        return enqueue(payload, false, true);
+    }
+
 	@Override
 	public void sendReliable(byte[] payload) throws IOException {
 		if (!enqueue(payload, true)) {
@@ -121,7 +125,11 @@ final class DspCommandDispatcher implements DspPayloadTransport {
 		commandQueue.cancelPendingMeters();
 	}
 
-	private boolean enqueue(byte[] payload, boolean reliableWrite) throws IOException {
+    private boolean enqueue(byte[] payload, boolean reliableWrite) throws IOException {
+        return enqueue(payload, reliableWrite, false);
+    }
+
+    private boolean enqueue(byte[] payload, boolean reliableWrite, boolean interactive) throws IOException {
 		if (Thread.currentThread().isInterrupted()) {
 			throw new IOException("Interrupted before submitting DSP command");
 		}
@@ -130,8 +138,11 @@ final class DspCommandDispatcher implements DspPayloadTransport {
 		synchronized (this) {
 			ensureConnected();
 			owner = workerThread;
-			completion = commandQueue.submit(payload, DspCommandPolicy.priorityOf(payload),
-					DspCommandPolicy.coalesceKey(payload), reliableWrite);
+            completion = interactive
+                    ? commandQueue.submitInteractive(payload, DspCommandPolicy.priorityOf(payload),
+                            DspCommandPolicy.coalesceKey(payload), reliableWrite)
+                    : commandQueue.submit(payload, DspCommandPolicy.priorityOf(payload),
+                            DspCommandPolicy.coalesceKey(payload), reliableWrite);
 		}
 
 		try {

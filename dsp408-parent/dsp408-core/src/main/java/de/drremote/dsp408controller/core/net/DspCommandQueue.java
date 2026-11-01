@@ -102,6 +102,8 @@ final class DspCommandQueue {
     private long unacknowledgedWrites;
     private Priority activePriority;
     private Command activeCommand;
+    // Reserved separately: ordinary priority/coalescing/displacement cannot remove it.
+    private Command interactiveReservation;
     private long lastTransmitEpochMs;
 
     synchronized void open() {
@@ -119,6 +121,8 @@ final class DspCommandQueue {
         writeRetries = 0L;
         unacknowledgedWrites = 0L;
         activePriority = null;
+        activeCommand = null;
+        interactiveReservation = null;
         lastTransmitEpochMs = 0L;
         notifyAll();
     }
@@ -148,7 +152,7 @@ final class DspCommandQueue {
                 coalescedMeterRequests++;
             }
             previous.completion.complete(false);
-        } else if (pending.size() >= PENDING_COMMAND_LIMIT) {
+        } else if (pendingCount() >= PENDING_COMMAND_LIMIT) {
             Command displaced = priority == Priority.SAFETY ? safetyDisplacementCandidate() : null;
             if (displaced == null) {
                 command.completion.completeExceptionally(new RejectedExecutionException(
@@ -164,9 +168,31 @@ final class DspCommandQueue {
             pendingByKey.put(coalesceKey, command);
         }
         pending.add(command);
-        maxPendingCommands = Math.max(maxPendingCommands, pending.size());
+        maxPendingCommands = Math.max(maxPendingCommands, pendingCount());
         notifyAll();
         return command.completion;
+    }
+
+    synchronized CompletableFuture<Boolean> submitInteractive(byte[] payload, Priority priority,
+            String coalesceKey, boolean reliableWrite) {
+        if (!open || Thread.currentThread().isInterrupted()) {
+            return CompletableFuture.failedFuture(new IOException("DSP command queue is closed"));
+        }
+        submittedCommands++;
+        boolean shortBackground = activeCommand != null && activeCommand.transmissionStarted
+                && (activeCommand.priority == Priority.METER || activeCommand.priority == Priority.KEEPALIVE);
+        if (interactiveReservation != null || !pending.isEmpty()
+                || (activeCommand != null && !shortBackground)) {
+            return CompletableFuture.failedFuture(new DspBusyException("The DSP has active or queued work."));
+        }
+        interactiveReservation = new Command(payload, priority, nextSequence++, coalesceKey, reliableWrite);
+        maxPendingCommands = Math.max(maxPendingCommands, pendingCount());
+        notifyAll();
+        return interactiveReservation.completion;
+    }
+
+    private int pendingCount() {
+        return pending.size() + (interactiveReservation == null ? 0 : 1);
     }
 
     private Command safetyDisplacementCandidate() {
@@ -186,14 +212,20 @@ final class DspCommandQueue {
     }
 
     synchronized Command take() throws InterruptedException {
-        while (open && pending.isEmpty()) {
+        while (open && pending.isEmpty() && interactiveReservation == null) {
             wait();
         }
         if (!open) {
             return null;
         }
 
-        Command command = pending.remove();
+        Command command;
+        if (interactiveReservation != null) {
+            command = interactiveReservation;
+            interactiveReservation = null;
+        } else {
+            command = pending.remove();
+        }
         if (command.coalesceKey != null) {
             pendingByKey.remove(command.coalesceKey, command);
         }
@@ -241,6 +273,11 @@ final class DspCommandQueue {
             completion.completeExceptionally(new IOException("DSP command cancelled before transmission", failure));
             return true;
         }
+        if (interactiveReservation != null && interactiveReservation.completion == completion) {
+            interactiveReservation = null;
+            completion.completeExceptionally(new IOException("DSP command cancelled before transmission", failure));
+            return true;
+        }
         for (Command command : pending) {
             if (command.completion == completion) {
                 pending.remove(command);
@@ -279,7 +316,7 @@ final class DspCommandQueue {
 
     synchronized Stats stats() {
         return new Stats(
-                pending.size(),
+                pendingCount(),
                 maxPendingCommands,
                 submittedCommands,
                 transmittedCommands,
@@ -302,6 +339,10 @@ final class DspCommandQueue {
         if (activeCommand != null) {
             activeCommand.completion.completeExceptionally(closed);
             activeCommand = null;
+        }
+        if (interactiveReservation != null) {
+            interactiveReservation.completion.completeExceptionally(closed);
+            interactiveReservation = null;
         }
         for (Command command : pending) {
             command.completion.completeExceptionally(closed);

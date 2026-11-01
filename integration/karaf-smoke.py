@@ -272,12 +272,12 @@ class Validation:
             raise RuntimeError(f"Karaf {action} failed: {report}")
         return report
 
-    def http(self, path, method="GET", timeout=10, body=None):
+    def http(self, path, method="GET", timeout=10, body=None, headers=None):
         started = time.monotonic()
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.ports['http']}/api/v1" + path,
             data=json.dumps(body if body is not None else {}).encode() if method == "POST" else None, method=method,
-            headers={"Content-Type": "application/json"})
+            headers={"Content-Type": "application/json", **(headers or {})})
         try:
             response = urllib.request.urlopen(request, timeout=timeout)
         except urllib.error.HTTPError as error:
@@ -285,9 +285,34 @@ class Validation:
         with response:
             data = json.loads(response.read())
             item = {"path": path, "method": method, "status": response.status,
-                    "seconds": round(time.monotonic() - started, 3), "body": data}
+                    "seconds": round(time.monotonic() - started, 3), "body": data,
+                    "serverTiming": response.headers.get("Server-Timing")}
         self.result["http"].append(item)
         return item
+
+    def web_app(self):
+        for asset, mime in (("", "text/html"), ("styles.css", "text/css"),
+                            ("app.mjs", "text/javascript"), ("model.mjs", "text/javascript"),
+                            ("icon.svg", "image/svg+xml")):
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.ports['http']}/app/" + asset, timeout=5) as response:
+                data = response.read()
+                if (response.status != 200 or not response.headers.get("Content-Type", "").startswith(mime)
+                        or response.headers.get("X-Content-Type-Options") != "nosniff"
+                        or "connect-src 'self'" not in response.headers.get("Content-Security-Policy", "")):
+                    raise AssertionError("Packaged web asset/policy is unavailable: " + asset)
+                self.result.setdefault("webAssets", []).append({"asset": asset or "index.html", "bytes": len(data),
+                                                               "sha256": hashlib.sha256(data).hexdigest()})
+        self.result["componentActivation"]["DspWebAppServlet"] = "Packaged LAN interface served with same-origin policy"
+
+    def browser_check(self):
+        from connection_stress import run_owned
+        output = self.state / "browser-ui.json"
+        code = run_owned(["node", str(HERE / "browser/karaf.mjs"),
+                          f"http://127.0.0.1:{self.ports['http']}", str(output)], timeout=60)
+        report = json.loads(output.read_text())
+        self.result["browserUi"] = report
+        if code or not report.get("ok"):
+            raise AssertionError(f"Packaged browser UI failed: {report}")
 
     def doctor(self):
         # Historical log errors can remain after an intentionally failed connect.
@@ -434,6 +459,26 @@ class Validation:
             if self.http(prefix + "/settings-cache")["body"].get("phase") != "STALE":
                 raise AssertionError("One parameter result must not certify the full settings snapshot")
             outcomes.append(body["status"])
+        # Real packaged interactive delivery: ACK only, duplicate transport requests
+        # share one result and never perform a second wire command or block read.
+        command_count = lambda command: sum(r[6:8] == command for r in peer.requests)
+        writes_before, reads_before = command_count("34"), command_count("27")
+        key = "karaf-interactive-request-00000001"
+        headers = {"Prefer": "wait=0", "Idempotency-Key": key}
+        request = {"channelId": "out8", "parameter": "gain", "value": -12.3, "verify": False}
+        sent = self.http(prefix + "/parameters/write", "POST", body=request, headers=headers)
+        replay = self.http(prefix + "/parameters/write", "POST", body=request, headers=headers)
+        if (sent["status"] != 200 or sent["body"].get("status") != "ACKNOWLEDGED"
+                or sent["body"] != replay["body"] or command_count("34") != writes_before + 1
+                or command_count("27") != reads_before or not sent.get("serverTiming", "").startswith("backend;dur=")):
+            raise AssertionError(f"Interactive ACK/deduplication failed: {sent}, {replay}")
+        foreign = self.http(prefix + "/parameters/write", "POST", body=request,
+                            headers={"Origin": "http://foreign.invalid"})
+        if foreign["status"] != 403 or command_count("34") != writes_before + 1:
+            raise AssertionError("Foreign-origin write was not rejected before effects")
+        self.result["interactiveDelivery"] = {"milliseconds": sent["seconds"] * 1000,
+                                                "serverTiming": sent["serverTiming"],
+                                                "sameKeyWireWrites": 1, "automaticReadbacks": 0}
         # Compare control requests only: central meter polling is deliberately live.
         controls = lambda: sum(r[6:8] in ("34", "35", "36", "38") for r in peer.requests)
         before = controls()
@@ -523,6 +568,7 @@ class Validation:
                 or any(p["writable"] for c in offline["body"]["channels"] for p in c["parameters"])
                 or any(peer.connections for peer in peers.values())):
             raise AssertionError(f"Offline capabilities must be side-effect free: {offline}")
+        self.web_app()
         # Batch sessions do not render a Gogo command's return value. Echo it
         # explicitly so a successful SSH exit cannot hide a missing shell path.
         shell = self.control("exec", "shell:echo (dsp408:connected)").get("data", "")
@@ -598,6 +644,8 @@ class Validation:
             if disconnected["status"] != 200:
                 raise AssertionError(f"Disconnect failed: {disconnected}")
         self.parameter_api(peers["writable"])
+        if self.args.browser_check:
+            self.browser_check()
         self.control("exec", "shell:echo (dsp408:connected)")
         self.control("features")
         self.control("memory")
@@ -677,6 +725,7 @@ def main(argv=None):
     parser.add_argument("--result-json", help="Additional destination for the complete JSON report")
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--reconnects", type=int, default=3)
+    parser.add_argument("--browser-check", action="store_true", help="Check packaged phone UI against owned loopback DSPs (requires npm ci and Chromium)")
     args = parser.parse_args(argv)
     if args.reconnects < 2:
         parser.error("--reconnects must be at least 2")

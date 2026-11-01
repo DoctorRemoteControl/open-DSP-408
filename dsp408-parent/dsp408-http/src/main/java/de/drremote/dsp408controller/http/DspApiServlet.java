@@ -116,6 +116,10 @@ public final class DspApiServlet extends HttpServlet {
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        if (!DspBrowserOriginPolicy.allowed(req)) {
+            sendError(resp, 403, "cross_origin_request", "Browser writes must come from the DSP server origin.");
+            return;
+        }
         try {
             RequestContext context = requestContext(req);
             String path = context.path();

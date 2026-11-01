@@ -124,3 +124,17 @@ threads. The fake keepalive reply is the Controller's expected generic ACK,
 `01 00 01 01`; a socket regression checks it explicitly. Physical read-only duration
 validation is a separate command and report; this smoke test contacts no DSP
 hardware.
+
+## Packaged mobile browser check
+
+The harness also verifies the packaged `/app/` HTML, CSS, modules and icon,
+including MIME, CSP and nosniff headers. Its interactive HTTP check sends an
+ACK-only command, repeats its request key and requires exactly one wire write
+and zero automatic block reads. Foreign-Origin writes fail before effects.
+
+After `npm ci --ignore-scripts` and `npx playwright-core install chromium`, add
+`--browser-check` to exercise the actual mobile page against this owned Karaf
+and its writable loopback peer. It explicitly connects the fixture, moves Out8
+gain, requires an ACK and timing feedback, then disconnects. `browser-ui.json`
+and its screenshot are retained in the state directory. No physical DSP is used.
+`DSP408_BROWSER_BIN` may select an installed local Chromium-compatible browser.

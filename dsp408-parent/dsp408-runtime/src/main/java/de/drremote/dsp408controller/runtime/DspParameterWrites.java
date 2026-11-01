@@ -14,6 +14,7 @@ import de.drremote.dsp408.api.ParameterWriteRequestDto;
 import de.drremote.dsp408.api.ParameterWriteResultDto;
 import de.drremote.dsp408.api.ParameterWriteStatus;
 import de.drremote.dsp408controller.core.service.DspController;
+import de.drremote.dsp408controller.core.net.DspBusyException;
 import de.drremote.dsp408controller.core.protocol.DspChannel;
 import de.drremote.dsp408controller.core.service.DspParameter;
 import de.drremote.dsp408controller.core.service.DspParameterCapability;
@@ -39,17 +40,28 @@ final class DspParameterWrites {
     }
 
     ParameterWriteResultDto write(ParameterWriteRequestDto request) {
+        return write(request, false);
+    }
+
+    ParameterWriteResultDto writeInteractive(ParameterWriteRequestDto request) {
+        return write(request, true);
+    }
+
+    private ParameterWriteResultDto write(ParameterWriteRequestDto request, boolean interactive) {
         Operation operation = new Operation(request);
         // Bound callers before the shared transaction monitor as well as the
         // physical queue, including callers waiting behind legacy transactions.
         if (!admission.tryAcquire()) {
             operation.dspId = dspId.get();
-            return operation.reject("dsp_overloaded", "The parameter operation limit is full (65 admitted writes).");
+            return operation.reject(interactive ? "dsp_busy" : "dsp_overloaded",
+                    "The parameter operation limit is full (65 admitted writes).");
         }
         try {
             // Capture identity, preflight and the bound session after admission to
             // the runtime transaction, so a queued caller cannot use an old target.
-            return transactions.withMetersPaused(() -> perform(operation));
+            return interactive
+                    ? transactions.withMetersPausedInteractive(() -> perform(operation, true))
+                    : transactions.withMetersPaused(() -> perform(operation, false));
         } catch (CancellationException superseded) {
             return operation.result(operation.acknowledged ? ParameterWriteStatus.UNCERTAIN
                     : ParameterWriteStatus.REJECTED, operation.acknowledged ? Boolean.TRUE : Boolean.FALSE,
@@ -57,6 +69,13 @@ final class DspParameterWrites {
                     operation.acknowledged
                             ? "The DSP acknowledged the write, but fresh readback was superseded."
                             : "A newer queued write superseded this write before transmission.");
+        } catch (DspBusyException busy) {
+            if (operation.dspId == null) operation.dspId = dspId.get();
+            return operation.result(operation.acknowledged ? ParameterWriteStatus.UNCERTAIN
+                    : ParameterWriteStatus.REJECTED, operation.acknowledged ? Boolean.TRUE : Boolean.FALSE,
+                    "dsp_busy", operation.acknowledged
+                            ? "The DSP acknowledged the write, but readback found other DSP work."
+                            : "The interactive write was rejected before transmission: " + busy.getMessage());
         } catch (RejectedExecutionException overloaded) {
             return operation.result(operation.acknowledged ? ParameterWriteStatus.UNCERTAIN
                     : ParameterWriteStatus.REJECTED, operation.acknowledged ? Boolean.TRUE : Boolean.FALSE,
@@ -85,7 +104,7 @@ final class DspParameterWrites {
         }
     }
 
-    private ParameterWriteResultDto perform(Operation operation) throws IOException {
+    private ParameterWriteResultDto perform(Operation operation, boolean interactive) throws IOException {
         operation.dspId = dspId.get();
         if (operation.request == null) {
             return operation.reject("invalid_input", "A parameter write request is required.");
@@ -127,7 +146,8 @@ final class DspParameterWrites {
 
         operation.attempted = true;
         try {
-            session.write(channel, parameter, operation.normalizedValue);
+            if (interactive) session.writeInteractive(channel, parameter, operation.normalizedValue);
+            else session.write(channel, parameter, operation.normalizedValue);
         } catch (UnsupportedDspOperationException unsupported) {
             return operation.reject("unsupported_parameter", unsupported.getMessage());
         }
@@ -143,7 +163,8 @@ final class DspParameterWrites {
                     "The DSP acknowledged the write, but the connection changed before verification.");
         }
 
-        DspParameterReading reading = session.readBack(channel, parameter);
+        DspParameterReading reading = interactive ? session.readBackInteractive(channel, parameter)
+                : session.readBack(channel, parameter);
         if (!session.isCurrent()) {
             return operation.result(ParameterWriteStatus.UNCERTAIN, Boolean.TRUE, "session_changed",
                     "The DSP acknowledged the write, but the connection changed during verification.");

@@ -13,6 +13,8 @@ HTTP/JSON control API for the DSP408/FIR408 runtime.
 
 This bundle exposes `DspService` through an OSGi HTTP Whiteboard servlet. It is useful for scripts, dashboards, integrations and smoke tests without using the Karaf shell.
 
+The same bundle serves the [mobile LAN controller](../../docs/MOBILE-LAN-APP.md) at `/app/`, with packaged same-origin assets and no frontend runtime dependencies.
+
 ## Servlet
 
 - Class: `DspApiServlet`

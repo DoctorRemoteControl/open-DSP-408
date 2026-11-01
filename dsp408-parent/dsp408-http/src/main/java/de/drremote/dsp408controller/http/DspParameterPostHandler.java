@@ -1,6 +1,7 @@
 package de.drremote.dsp408controller.http;
 
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.Set;
 
 import javax.servlet.http.HttpServletRequest;
@@ -22,6 +23,7 @@ final class DspParameterPostHandler {
 
     private final ObjectMapper bodyMapper;
     private final DspHttpResponses responses;
+    private final DspParameterRequestCache requests = new DspParameterRequestCache();
 
     DspParameterPostHandler(ObjectMapper mapper, DspHttpResponses responses) {
         // Keep legacy endpoints' coercion and duplicate-key behavior unchanged.
@@ -35,10 +37,38 @@ final class DspParameterPostHandler {
                    HttpServletResponse response) throws Exception {
         if (!path.equals("/parameters/write")) return false;
 
-        ParameterWriteRequestDto write = readRequest(request);
-        ParameterWriteResultDto result = dsp.writeParameter(write);
-        responses.writeJson(response, httpStatus(result), result);
+        long started = System.nanoTime();
+        try {
+            String key = request.getHeader("Idempotency-Key");
+            if (key != null && !key.matches("[A-Za-z0-9._~-]{16,128}")) {
+                throw new IllegalArgumentException("Idempotency-Key must contain 16 to 128 safe ASCII token characters.");
+            }
+            ParameterWriteRequestDto write = readRequest(request);
+            boolean interactive = interactive(request.getHeader("Prefer"));
+            DspParameterRequestCache.WriteOperation operation = () -> interactive
+                    ? dsp.writeParameterInteractive(write) : dsp.writeParameter(write);
+            ParameterWriteResultDto result = key == null ? operation.execute()
+                    : requests.execute(key, dsp.dspId(), write, operation);
+            setTiming(response, started);
+            responses.writeJson(response, httpStatus(result), result);
+        } catch (Exception | Error failure) {
+            setTiming(response, started);
+            throw failure;
+        }
         return true;
+    }
+
+    private static boolean interactive(String prefer) {
+        if (prefer == null) return false;
+        for (String preference : prefer.split(",")) {
+            if (preference.trim().matches("(?i)wait\\s*=\\s*0")) return true;
+        }
+        return false;
+    }
+
+    private static void setTiming(HttpServletResponse response, long started) {
+        double milliseconds = Math.max(0L, System.nanoTime() - started) / 1_000_000.0;
+        response.setHeader("Server-Timing", String.format(Locale.ROOT, "backend;dur=%.3f", milliseconds));
     }
 
     private ParameterWriteRequestDto readRequest(HttpServletRequest request) throws Exception {
@@ -92,10 +122,14 @@ final class DspParameterPostHandler {
     private static int httpStatus(ParameterWriteResultDto result) {
         return switch (result.status()) {
             case ACKNOWLEDGED, VERIFIED -> 200;
-            case REJECTED -> "dsp_overloaded".equals(result.errorCode()) ? 503
+            case REJECTED -> overloaded(result.errorCode()) ? 503
                     : "invalid_input".equals(result.errorCode()) ? 422 : 409;
-            case UNCERTAIN -> "dsp_overloaded".equals(result.errorCode()) ? 503
+            case UNCERTAIN -> overloaded(result.errorCode()) ? 503
                     : "readback_mismatch".equals(result.errorCode()) ? 409 : 502;
         };
+    }
+
+    private static boolean overloaded(String errorCode) {
+        return "dsp_overloaded".equals(errorCode) || "dsp_busy".equals(errorCode);
     }
 }

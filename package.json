@@ -1,0 +1,12 @@
+{
+  "name": "dsp408-browser-tests",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Development-only checks for the bundled LAN browser controller",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test:web": "node --test dsp408-parent/dsp408-http/src/test/js/*.test.mjs",
+    "test:browser": "node --test integration/browser/*.test.mjs"
+  },
+  "devDependencies": { "playwright-core": "1.64.1" }
+}
