@@ -34,7 +34,7 @@ meters and keepalive. Audio controls, preset recall/store, PIN login, FIR writes
 and unknown request layouts are rejected. Checksums and declared lengths are
 validated. The proxy is an allowlisting test tool, not a general protocol proxy.
 
-The Java worker reads all32 configuration blocks before/after and periodically
+The Java worker reads all 32 configuration blocks before/after and periodically
 during the run. It compares exact bytes and records their concatenated SHA-256.
 Every five minutes by default it reconnects and compares a fresh full dump.
 Resource samples include heap usage and DSP thread count. Heap allocation can
@@ -49,17 +49,60 @@ the source revision when reporting a device problem.
 ## Initial measured check, 2026-11-01
 
 The connected device identified itself as **FIR408 V0113P**. Bootstrap plus two
-full32-block dumps produced100 outgoing and100 incoming frames, with no guard
-errors. Median matching response55.693ms, p95 66.213ms, maximum93.043ms. Both
+full 32-block dumps produced 100 outgoing and 100 incoming frames, with no guard
+errors. Median matching response55.693 ms, p95 66.213 ms, maximum 93.043 ms. Both
 configuration dumps matched:
 
 ```text
 b0013872dd13b9d52fc266dddfd742114c549b5ce964bd472dc77fb84adc9cd2
 ```
 
-The tested core JAR's117 class files were subsequently compared against the
+The tested core JAR's 117 class files were subsequently compared against the
 staged/verified stability commit `4c51a6d`: every class hash matched. Runtime
 artifact SHA-256 and complete local evidence are retained separately under the
 workspace's validation state directory. No audio, preset or firmware setting was
-changed by this check. Longer-run and final-build results are recorded after
-those runs complete.
+changed by this check. The duration and final-build results follow below.
+
+## Completed duration run
+
+The stability build ran for **1802.945 seconds** (30 minutes), making **6688 meter
+requests** and **five reconnects**, with **zero missing meter samples**. All 32
+blocks remained byte-for-byte identical across the periodic and final dumps.
+The guard recorded 8056 requests and 8058 responses; the two extra incoming frames
+were the initial device-address/session-ready announcements. Every request had
+a matching response, and no command outside the exact read-only allowlist passed.
+
+| Matching-response latency | Measured |
+| --- | ---: |
+| Median | 56.085 ms |
+| p95 | 63.077 ms |
+| p99 | 70.152 ms |
+| Maximum | 107.337 ms |
+
+All 58 resource samples showed exactly three DSP threads and nine JVM threads.
+Heap usage ranged from about 4 MB to 600 MB between collections; later samples
+returned to about 29 MB. These are allocation/GC observations, not a proof that
+all workloads are free of memory leaks. The process and owned sockets stopped.
+
+## Final product build
+
+The clean standalone build of product commit `f9cd31b` embeds the complete
+Controller/protocol source revisions with both dirty flags false. That build
+also passed a separate **61.892-second** hardware run: 199 meter requests,
+one reconnect, 367 requests and 369 responses, zero missed samples, and the same
+32-block configuration digest. Median response 56.201 ms; p95 66.684 ms; maximum
+99.172 ms. The final proxy reported zero live threads and open sockets; its Java
+process stopped. Subsequent CI fixes affect workflow/build-tool selection and a
+test-peer lifetime, not the product's bytecode.
+
+Original snapshots, wire logs, resource samples, artifact identities and cleanup
+reports are retained locally in:
+
+```text
+Archiv/DSP408/controller-readiness-20261101/
+```
+
+The Git repository records these measured aggregates rather than publishing the
+live device's full configuration. The run covers this FIR408 V0113P and this
+host/network path. It does not validate audio writes, preset flash timing or
+other firmware. No audio, preset or firmware settings were changed.

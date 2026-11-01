@@ -379,14 +379,14 @@ de.drremote.dsp408controller
 
 ### Runtime Behavior
 
-* If `auto.connect=true`, the component tries to connect during activation.
+* If `auto.connect=true`, activation schedules connection work on the lifecycle worker and returns without waiting for the device.
 * If the configured DSP IP or port changes while connected, the component reconnects automatically.
 * `connect()` always uses the current OSGi configuration and is idempotent while a DSP session already exists; only explicit `reconnect()` replaces that session.
-* A new connection performs one full parameter dump. Missing blocks get one later pass (the transport itself retries each read once), then the cache becomes degraded instead of flooding the DSP with repeated reads.
+* A new connection reads the complete parameter dump. Required reads use one 1000 ms response window without retransmission; an unanswered read closes the session. Cache readiness is reported separately through `SettingsCacheDto`.
 * The runtime is the only active meter poller. HTTP, Android, ESP and Matrix clients read the shared cache.
 * Normal settings reads are RAM-only. `POST /refresh` explicitly rebuilds the complete cache from the DSP.
-* Normal writes wait for the DSP ACK and then update the RAM/block cache locally. If both repeat-safe attempts lack an ACK, the API reports failure and leaves cached state unchanged. Writes do not trigger a parameter-block readback; reconnect or explicit `POST /refresh` is the authoritative resynchronization point.
-* Meter polling resumes one interval after a control transaction. An unanswered meter request gets a short recovery window before a queued control command, so consecutive app writes are not mixed with stale meter traffic.
+* Normal writes are sent once and wait for the DSP ACK before updating cached state. A missing ACK closes the session and reports uncertain completion; it does not optimistically update cached state. Writes do not trigger a parameter-block readback; reconnect or explicit `POST /refresh` provides authoritative device state.
+* Pausing meter polling removes pending and selected-but-unsent samples. A sample whose transmission has started completes before the next serialized command. Polling resumes one interval after a control transaction. An unanswered meter sample gets a short recovery pause; verified responses govern keepalive health probes.
 * Old APIs use the default DSP. Multi-DSP APIs use `/api/v1/dsps/{id}/...`.
 
 Example additional DSPs:
