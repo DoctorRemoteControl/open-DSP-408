@@ -57,6 +57,7 @@ do not contact the physical DSP. In the complete local DSP408 workspace,
 
 ## Documentation
 
+- [Firmware-aware parameter API](docs/PARAMETER-API.md)
 - [Queue capacity and overload](docs/QUEUE-OVERLOAD.md)
 - [Read-only hardware validation](docs/HARDWARE-VALIDATION.md)
 - [Controller setup and commands](dsp408-parent/README.md)

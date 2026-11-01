@@ -28,6 +28,7 @@ public final class DspState {
     private final TestToneState testToneState = new TestToneState();
 
     private final Map<Integer, byte[]> lastBlocks = new ConcurrentHashMap<>();
+    private final Map<Integer, ReceivedBlock> lastReceivedBlocks = new ConcurrentHashMap<>();
     private final Map<Integer, Long> blockRevisions = new ConcurrentHashMap<>();
     private final Map<Integer, String> presetNames = new ConcurrentHashMap<>();
     private final Map<Integer, Long> presetNameRevisions = new ConcurrentHashMap<>();
@@ -70,6 +71,7 @@ public final class DspState {
         meterState.reset();
         testToneState.reset();
         lastBlocks.clear();
+        lastReceivedBlocks.clear();
         blockRevisions.clear();
         presetNames.clear();
         presetNameRevisions.clear();
@@ -627,12 +629,30 @@ public final class DspState {
         }
         int normalizedIndex = blockIndex & 0xFF;
         lastBlocks.put(normalizedIndex, Arrays.copyOf(data, data.length));
-        blockRevisions.put(normalizedIndex, ++nextBlockRevision);
+        long revision = ++nextBlockRevision;
+        blockRevisions.put(normalizedIndex, revision);
+        lastReceivedBlocks.put(normalizedIndex, new ReceivedBlock(data, revision, System.currentTimeMillis()));
     }
 
     public synchronized byte[] getBlock(int blockIndex) {
         byte[] data = lastBlocks.get(blockIndex & 0xFF);
         return data == null ? null : Arrays.copyOf(data, data.length);
+    }
+
+    /** Authoritative receive data, unaffected by optimistic server-originated cache patches. */
+    public synchronized ReceivedBlock receivedBlock(int blockIndex) {
+        return lastReceivedBlocks.get(blockIndex & 0xFF);
+    }
+
+    public record ReceivedBlock(byte[] data, long receiveRevision, long observedAtEpochMs) {
+        public ReceivedBlock {
+            data = Arrays.copyOf(data, data.length);
+        }
+
+        @Override
+        public byte[] data() {
+            return Arrays.copyOf(data, data.length);
+        }
     }
 
     /**
@@ -702,6 +722,7 @@ public final class DspState {
 
     public synchronized void clearCachedBlocks() {
         lastBlocks.clear();
+        lastReceivedBlocks.clear();
         blockRevisions.clear();
     }
 

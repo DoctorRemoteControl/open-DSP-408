@@ -16,6 +16,9 @@ This bundle contains the stable service contract used by the other bundles. It d
 ## Main Types
 
 - `DspService` - main control/query interface.
+- `DspParameterApi` - additive firmware capabilities and structured gain/mute/phase/delay writes.
+- `CapabilitiesDto` / `ChannelCapabilitiesDto` / `ParameterCapabilityDto` - immutable profile, range, resolution and mapping-evidence snapshots.
+- `ParameterWriteRequestDto` / `ParameterWriteResultDto` / `ParameterReadbackDto` - strict values, explicit normalized values, ACK versus verified readback, rejection and uncertain completion.
 - `DspInstanceDto` - configured DSP instance summary for multi-DSP setups.
 - `StateDto` - current connection, device, channel, full 8x4 matrix and all 104 PEQ bands.
 - `MatrixOutputDto` / `MatrixCrosspointDto` - routed inputs plus all four
@@ -62,3 +65,13 @@ This bundle contains the stable service contract used by the other bundles. It d
 - No HTTP, shell or Matrix transport.
 
 Functions that are still `not_decoded` in the protocol libraries are intentionally not exposed as high-level methods.
+
+## Parameter capabilities and write outcomes
+
+See the [parameter API contract](../../docs/PARAMETER-API.md) for supported
+profiles, evidence limits and HTTP examples. The default methods in
+`DspParameterApi` preserve older-provider linkage: an older implementation
+returns unavailable capabilities and throws `UnsupportedOperationException` for
+the new write operation. Value fields snapshot finite numbers and booleans, and
+all catalog lists are defensive copies. `VERIFIED` requires matching normalized
+and readback values; an ACK alone produces `ACKNOWLEDGED`.

@@ -13,6 +13,7 @@
   ],
   "tags": [
     {"name": "meta"},
+    {"name": "parameters"},
     {"name": "dsps"},
     {"name": "connection"},
     {"name": "device"},
@@ -32,6 +33,108 @@
     {"name": "debug"}
   ],
   "paths": {
+    "/api/v1/capabilities": {
+      "get": {
+        "tags": [
+          "parameters"
+        ],
+        "summary": "Get firmware-aware parameter capabilities from RAM",
+        "description": "Gain, mute, phase and delay for all twelve channels. Recognized identities are exactly DSP408 V0104 and FIR408 V0113P. Offline or unknown identities never advertise writable=true. This request does not connect, bootstrap, query hardware or synchronize settings.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ParameterCapabilitiesResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/parameters/write": {
+      "post": {
+        "tags": [
+          "parameters"
+        ],
+        "summary": "Write one parameter with an explicit acknowledgement/readback outcome",
+        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes.",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/ParameterWriteBody"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ParameterWriteAcceptedResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ParameterWriteInvalidJsonResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ParameterWriteConflictResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ParameterWriteInvalidInputResponse"
+          },
+          "502": {
+            "$ref": "#/components/responses/ParameterWriteUncertainResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ParameterWriteOverloadedResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/dsps/{dspId}/capabilities": {
+      "get": {
+        "tags": [
+          "parameters"
+        ],
+        "summary": "Get firmware-aware parameter capabilities from RAM",
+        "description": "Gain, mute, phase and delay for all twelve channels. Recognized identities are exactly DSP408 V0104 and FIR408 V0113P. Offline or unknown identities never advertise writable=true. This request does not connect, bootstrap, query hardware or synchronize settings.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ParameterCapabilitiesResponse"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/dspId"
+          }
+        ]
+      }
+    },
+    "/api/v1/dsps/{dspId}/parameters/write": {
+      "post": {
+        "tags": [
+          "parameters"
+        ],
+        "summary": "Write one parameter with an explicit acknowledgement/readback outcome",
+        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes.",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/ParameterWriteBody"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ParameterWriteAcceptedResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ParameterWriteInvalidJsonResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ParameterWriteConflictResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ParameterWriteInvalidInputResponse"
+          },
+          "502": {
+            "$ref": "#/components/responses/ParameterWriteUncertainResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ParameterWriteOverloadedResponse"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/dspId"
+          }
+        ]
+      }
+    },
     "/api/v1/health": {"get": {"tags": ["meta"], "summary": "Health check", "responses": {"200": {"description": "OK", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Object"}}}}}}},
     "/api/v1/help": {"get": {"tags": ["meta"], "summary": "Get shell help text", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/openapi.json": {"get": {"tags": ["meta"], "summary": "Get this OpenAPI document", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
@@ -150,6 +253,43 @@
       "refreshPreset": {"name": "refresh", "in": "query", "required": false, "schema": {"type": "boolean", "default": true}, "description": "Scan parameter blocks after writes and before optional unmute."}
     },
     "requestBodies": {
+      "ParameterWriteBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterWriteRequestDto"
+            },
+            "examples": {
+              "verifiedGain": {
+                "summary": "Omitted verify defaults to true",
+                "value": {
+                  "channelId": "out1",
+                  "parameter": "gain",
+                  "value": -12.34
+                }
+              },
+              "acknowledgedMute": {
+                "summary": "Explicit ACK-only mute on a channel without observed FIR mute readback",
+                "value": {
+                  "channelId": "out1",
+                  "parameter": "mute",
+                  "value": true,
+                  "verify": false
+                }
+              },
+              "verifiedDelay": {
+                "value": {
+                  "channelId": "out1",
+                  "parameter": "delay",
+                  "value": 1.234,
+                  "verify": true
+                }
+              }
+            }
+          }
+        }
+      },
       "ObjectBody": {
         "required": true,
         "content": {
@@ -168,6 +308,263 @@
       }
     },
     "responses": {
+      "ParameterCapabilitiesResponse": {
+        "description": "RAM-only capabilities and mapping evidence for the selected DSP. Older providers return unavailable capabilities.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CapabilitiesDto"
+            },
+            "examples": {
+              "olderProvider": {
+                "value": {
+                  "dspId": "main",
+                  "connected": false,
+                  "firmwareRecognized": false,
+                  "deviceVersion": null,
+                  "libraryType": "unknown",
+                  "parameterNames": [],
+                  "channels": [],
+                  "unavailableReason": "capabilities_unavailable"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ParameterWriteAcceptedResponse": {
+        "description": "ACKNOWLEDGED after an ACK, or VERIFIED only after a fresh matching device readback. An ACK alone does not verify the value.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterWriteResultDto"
+            },
+            "examples": {
+              "acknowledged": {
+                "value": {
+                  "requestId": "3f48e66d-0902-4d82-9a3c-f08b615d854a",
+                  "dspId": "main",
+                  "channelId": "out1",
+                  "parameter": "gain",
+                  "requestedValue": -12.34,
+                  "normalizedValue": -12.3,
+                  "status": "ACKNOWLEDGED",
+                  "acknowledged": true,
+                  "transmitted": true,
+                  "readback": null,
+                  "errorCode": null,
+                  "message": "Parameter outcome.",
+                  "completedAtEpochMs": 1793523600100
+                }
+              },
+              "verified": {
+                "value": {
+                  "requestId": "3f48e66d-0902-4d82-9a3c-f08b615d854a",
+                  "dspId": "main",
+                  "channelId": "out1",
+                  "parameter": "gain",
+                  "requestedValue": -12.34,
+                  "normalizedValue": -12.3,
+                  "status": "VERIFIED",
+                  "acknowledged": true,
+                  "transmitted": true,
+                  "readback": {
+                    "value": -12.3,
+                    "blockIndex": "00",
+                    "receiveRevision": 9,
+                    "observedAtEpochMs": 1793523600099
+                  },
+                  "errorCode": null,
+                  "message": "Parameter outcome.",
+                  "completedAtEpochMs": 1793523600100
+                }
+              }
+            }
+          }
+        }
+      },
+      "ParameterWriteInvalidJsonResponse": {
+        "description": "Malformed JSON, duplicate object keys or trailing JSON values.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterHttpError"
+            },
+            "example": {
+              "error": "invalid_json",
+              "message": "Request body is not valid JSON.",
+              "status": 400
+            }
+          }
+        }
+      },
+      "ParameterWriteConflictResponse": {
+        "description": "Disconnected or unsupported write/readback is REJECTED before sending. A readback mismatch is UNCERTAIN after ACK. Older providers may return the legacy unsupported_operation error envelope.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ParameterWriteResultDto"
+                },
+                {
+                  "$ref": "#/components/schemas/ParameterHttpError"
+                }
+              ]
+            },
+            "examples": {
+              "notConnected": {
+                "value": {
+                  "requestId": "3f48e66d-0902-4d82-9a3c-f08b615d854a",
+                  "dspId": "main",
+                  "channelId": "out1",
+                  "parameter": "gain",
+                  "requestedValue": -12.34,
+                  "normalizedValue": -12.3,
+                  "status": "REJECTED",
+                  "acknowledged": false,
+                  "transmitted": false,
+                  "readback": null,
+                  "errorCode": "dsp_not_connected",
+                  "message": "Parameter outcome.",
+                  "completedAtEpochMs": 1793523600100
+                }
+              },
+              "readbackUnsupported": {
+                "value": {
+                  "requestId": "3f48e66d-0902-4d82-9a3c-f08b615d854a",
+                  "dspId": "main",
+                  "channelId": "out1",
+                  "parameter": "gain",
+                  "requestedValue": -12.34,
+                  "normalizedValue": -12.3,
+                  "status": "REJECTED",
+                  "acknowledged": false,
+                  "transmitted": false,
+                  "readback": null,
+                  "errorCode": "readback_unsupported",
+                  "message": "Parameter outcome.",
+                  "completedAtEpochMs": 1793523600100
+                }
+              },
+              "readbackMismatch": {
+                "value": {
+                  "requestId": "3f48e66d-0902-4d82-9a3c-f08b615d854a",
+                  "dspId": "main",
+                  "channelId": "out1",
+                  "parameter": "gain",
+                  "requestedValue": -12.34,
+                  "normalizedValue": -12.3,
+                  "status": "UNCERTAIN",
+                  "acknowledged": true,
+                  "transmitted": true,
+                  "readback": {
+                    "value": -10.0,
+                    "blockIndex": "00",
+                    "receiveRevision": 9,
+                    "observedAtEpochMs": 1793523600099
+                  },
+                  "errorCode": "readback_mismatch",
+                  "message": "Parameter outcome.",
+                  "completedAtEpochMs": 1793523600100
+                }
+              }
+            }
+          }
+        }
+      },
+      "ParameterWriteInvalidInputResponse": {
+        "description": "Invalid object, unknown fields/parameter, wrong JSON types, nonfinite numeric value or out-of-range input. Validation precedes writes. A runtime rejection uses errorCode=invalid_input; body validation uses the error envelope.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ParameterWriteResultDto"
+                },
+                {
+                  "$ref": "#/components/schemas/ParameterHttpError"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ParameterWriteUncertainResponse": {
+        "description": "UNCERTAIN: ACK was lost, readback failed or the bound DSP session changed. The write may have taken effect; no automatic retry or rollback occurs.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterWriteResultDto"
+            },
+            "examples": {
+              "writeFailed": {
+                "value": {
+                  "requestId": "3f48e66d-0902-4d82-9a3c-f08b615d854a",
+                  "dspId": "main",
+                  "channelId": "out1",
+                  "parameter": "gain",
+                  "requestedValue": -12.34,
+                  "normalizedValue": -12.3,
+                  "status": "UNCERTAIN",
+                  "acknowledged": false,
+                  "transmitted": null,
+                  "readback": null,
+                  "errorCode": "write_failed",
+                  "message": "Parameter outcome.",
+                  "completedAtEpochMs": 1793523600100
+                }
+              }
+            }
+          }
+        }
+      },
+      "ParameterWriteOverloadedResponse": {
+        "description": "errorCode=dsp_overloaded. Admission rejection is REJECTED with transmitted=false; overload during readback after an ACK is UNCERTAIN with transmitted=true.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterWriteResultDto"
+            },
+            "examples": {
+              "admissionOverload": {
+                "value": {
+                  "requestId": "3f48e66d-0902-4d82-9a3c-f08b615d854a",
+                  "dspId": "main",
+                  "channelId": "out1",
+                  "parameter": "gain",
+                  "requestedValue": -12.34,
+                  "normalizedValue": -12.3,
+                  "status": "REJECTED",
+                  "acknowledged": false,
+                  "transmitted": false,
+                  "readback": null,
+                  "errorCode": "dsp_overloaded",
+                  "message": "Parameter outcome.",
+                  "completedAtEpochMs": 1793523600100
+                }
+              },
+              "readbackOverload": {
+                "value": {
+                  "requestId": "3f48e66d-0902-4d82-9a3c-f08b615d854a",
+                  "dspId": "main",
+                  "channelId": "out1",
+                  "parameter": "gain",
+                  "requestedValue": -12.34,
+                  "normalizedValue": -12.3,
+                  "status": "UNCERTAIN",
+                  "acknowledged": true,
+                  "transmitted": true,
+                  "readback": null,
+                  "errorCode": "dsp_overloaded",
+                  "message": "Parameter outcome.",
+                  "completedAtEpochMs": 1793523600100
+                }
+              }
+            }
+          }
+        }
+      },
       "DspOverloadedResponse": {
         "description": "The DSP command queue has 64 pending commands. This command was rejected or displaced by a safety command before transmission. The connection remains usable. Multi-command requests may have completed earlier operations; preset failures retain their operation and emergency-mute details.",
         "content": {
@@ -243,6 +640,430 @@
       }
     },
     "schemas": {
+      "CapabilitiesDto": {
+        "type": "object",
+        "required": [
+          "dspId",
+          "connected",
+          "firmwareRecognized",
+          "deviceVersion",
+          "libraryType",
+          "parameterNames",
+          "channels",
+          "unavailableReason"
+        ],
+        "properties": {
+          "dspId": {
+            "type": "string"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "firmwareRecognized": {
+            "type": "boolean"
+          },
+          "deviceVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Exact firmware identity; recognized profiles are DSP408 V0104 and FIR408 V0113P."
+          },
+          "libraryType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parameterNames": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "gain",
+                "mute",
+                "phase",
+                "delay"
+              ]
+            }
+          },
+          "channels": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/components/schemas/ChannelCapabilitiesDto"
+            },
+            "description": "All twelve channels for the bundled catalog; empty when a provider has no capability support."
+          },
+          "unavailableReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ChannelCapabilitiesDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "index",
+          "parameters"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "ina",
+              "inb",
+              "inc",
+              "ind",
+              "out1",
+              "out2",
+              "out3",
+              "out4",
+              "out5",
+              "out6",
+              "out7",
+              "out8"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 11
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParameterCapabilityDto"
+            }
+          }
+        }
+      },
+      "ParameterCapabilityDto": {
+        "type": "object",
+        "required": [
+          "name",
+          "valueType",
+          "unit",
+          "minimum",
+          "maximum",
+          "resolution",
+          "writable",
+          "readbackSupported",
+          "writeEvidence",
+          "readEvidence",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "gain",
+              "mute",
+              "phase",
+              "delay"
+            ]
+          },
+          "valueType": {
+            "type": "string",
+            "enum": [
+              "number",
+              "boolean"
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "examples": [
+              "dB",
+              "ms",
+              null
+            ]
+          },
+          "minimum": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "maximum": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "resolution": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParameterStepDto"
+            },
+            "description": "Closed quantization ranges. Gain: 0.5 dB through -20 dB, then 0.1 dB. Delay: 1/96 ms. Empty for booleans."
+          },
+          "writable": {
+            "type": "boolean",
+            "description": "Requires a live connection, recognized firmware and a supported write mapping."
+          },
+          "readbackSupported": {
+            "type": "boolean",
+            "description": "Known evidence-backed read mapping; independent of current connection. FIR mute is observed only for InD and Out8."
+          },
+          "writeEvidence": {
+            "type": "string"
+          },
+          "readEvidence": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ParameterStepDto": {
+        "type": "object",
+        "required": [
+          "fromInclusive",
+          "toInclusive",
+          "step"
+        ],
+        "properties": {
+          "fromInclusive": {
+            "type": "number"
+          },
+          "toInclusive": {
+            "type": "number"
+          },
+          "step": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "ParameterWriteRequestDto": {
+        "type": "object",
+        "required": [
+          "channelId",
+          "parameter",
+          "value"
+        ],
+        "properties": {
+          "channelId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Channel id such as ina or out1; accepted core channel aliases also apply."
+          },
+          "parameter": {
+            "type": "string",
+            "enum": [
+              "gain",
+              "mute",
+              "phase",
+              "delay"
+            ]
+          },
+          "value": {
+            "type": [
+              "number",
+              "boolean"
+            ],
+            "description": "Finite JSON number for gain/delay; JSON boolean for mute/phase. Strings and null are rejected."
+          },
+          "verify": {
+            "type": "boolean",
+            "default": true,
+            "description": "When true, unsupported readback is rejected before sending."
+          }
+        },
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "parameter": {
+                "const": "gain"
+              },
+              "value": {
+                "type": "number",
+                "minimum": -60,
+                "maximum": 12
+              }
+            }
+          },
+          {
+            "properties": {
+              "parameter": {
+                "const": "delay"
+              },
+              "value": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 680
+              }
+            }
+          },
+          {
+            "properties": {
+              "parameter": {
+                "enum": [
+                  "mute",
+                  "phase"
+                ]
+              },
+              "value": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
+      "ParameterReadbackDto": {
+        "type": "object",
+        "required": [
+          "value",
+          "blockIndex",
+          "receiveRevision",
+          "observedAtEpochMs"
+        ],
+        "properties": {
+          "value": {
+            "type": [
+              "number",
+              "boolean"
+            ]
+          },
+          "blockIndex": {
+            "type": "string"
+          },
+          "receiveRevision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "description": "Fresh device receive revision, never advanced by a local cache patch."
+          },
+          "observedAtEpochMs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      },
+      "ParameterWriteResultDto": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "dspId",
+          "channelId",
+          "parameter",
+          "requestedValue",
+          "normalizedValue",
+          "status",
+          "acknowledged",
+          "transmitted",
+          "errorCode",
+          "message",
+          "completedAtEpochMs"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "description": "Correlation only; repeating a request may repeat a write."
+          },
+          "dspId": {
+            "type": "string"
+          },
+          "channelId": {
+            "type": "string"
+          },
+          "parameter": {
+            "type": "string"
+          },
+          "requestedValue": {
+            "type": [
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "normalizedValue": {
+            "type": [
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACKNOWLEDGED",
+              "VERIFIED",
+              "UNCERTAIN",
+              "REJECTED"
+            ]
+          },
+          "acknowledged": {
+            "type": "boolean"
+          },
+          "transmitted": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "false: rejected before transmission; true: transmission is known; null: sending may have occurred."
+          },
+          "readback": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParameterReadbackDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "completedAtEpochMs": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ParameterHttpError": {
+        "type": "object",
+        "required": [
+          "error",
+          "message",
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
       "Object": {
         "type": "object",
         "additionalProperties": true

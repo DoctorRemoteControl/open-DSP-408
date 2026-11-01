@@ -5,6 +5,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 import de.drremote.dsp408controller.core.decode.DspPayloadRouter;
@@ -90,6 +91,30 @@ public final class DspController {
 	public DspState state() {
 		return state;
 	}
+
+    /** Reads cached identity and bundled mappings only; does not contact the DSP. */
+    public DspParameterCatalog parameterCatalog() {
+        synchronized (lifecycleLock) {
+            return new DspParameterCatalog(library, deviceVersion, isConnected());
+        }
+    }
+
+    public DspParameterSession openParameterSession() {
+        synchronized (lifecycleLock) {
+            DspClient capturedClient = client;
+            DspLibrary capturedLibrary = library;
+            String capturedVersion = deviceVersion;
+            DspParameterCatalog catalog = new DspParameterCatalog(capturedLibrary, capturedVersion, isConnected());
+            return new DspParameterSession(capturedClient, catalog, state, action -> {
+                synchronized (lifecycleLock) {
+                    if (capturedClient == null || client != capturedClient || library != capturedLibrary
+                            || !Objects.equals(deviceVersion, capturedVersion) || !isConnected()) return false;
+                    action.run();
+                    return true;
+                }
+            });
+        }
+    }
 
 	public String deviceVersion() {
 		return deviceVersion;
@@ -565,7 +590,7 @@ public final class DspController {
 	private DspClient requireClient() {
         DspClient current = client;
         if (!startupReady || current == null || !current.isConnected()) {
-            throw new IllegalStateException("Not connected. Run 'connect' first.");
+            throw new DspNotConnectedException("Not connected. Run 'connect' first.");
         }
         return current;
 	}

@@ -58,6 +58,11 @@ final class DspGetRouteHandler {
             return true;
         }
 
+        if (path.equals("/capabilities")) {
+            responses.writeJson(response, 200, dsp.getCapabilities());
+            return true;
+        }
+
         if (path.equals("/preset/export")) {
             responses.writeJson(response, 200, dsp.exportPresetSnapshot());
             return true;

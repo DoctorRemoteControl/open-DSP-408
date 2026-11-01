@@ -23,6 +23,8 @@ This bundle exposes `DspService` through an OSGi HTTP Whiteboard servlet. It is 
 - `GET /api/v1/health`
 - `GET /api/v1/help`
 - `GET /api/v1/openapi.json`
+- `GET /api/v1/capabilities`
+- `POST /api/v1/parameters/write`
 - `GET /api/v1/dsps`
 - `GET /api/v1/dsps/{dspId}/state`
 - `POST /api/v1/dsps/{dspId}/connection/connect`
@@ -227,6 +229,50 @@ twelve channels from the observed block map.
 On FIR408, the original GUI values and the live block dump confirm the four
 input gates, four input compressors and eight output limiters. Each DTO keeps
 its per-field device-confirmation and update-source information.
+
+## Parameter capabilities and write outcomes
+
+`GET /api/v1/capabilities` returns the RAM-only firmware catalog for gain, mute,
+phase and delay on all twelve channels. It does not query or synchronize the
+device. The exact recognized profiles are `DSP408 V0104` and `FIR408 V0113P`;
+disconnected or unknown identities never advertise `writable: true`. Each
+parameter lists its value type, unit, limits, quantization, mapping evidence and
+readback support. An older service provider returns unavailable capabilities.
+
+`POST /api/v1/parameters/write` accepts one strict JSON object:
+
+```json
+{"channelId":"out1","parameter":"gain","value":-12.34,"verify":true}
+```
+
+`verify` defaults to `true` when omitted. Gain and delay require finite JSON
+numbers; mute and phase require JSON booleans. Gain ranges from -60 to +12 dB,
+with 0.5 dB steps through -20 dB and 0.1 dB steps above. Delay ranges from 0 to
+680 ms with 1/96 ms resolution. Results expose both `requestedValue` and the
+quantized `normalizedValue`. Unknown fields, nulls and incorrect value types
+return HTTP 422 before the parameter service is invoked. Malformed JSON,
+duplicate keys and trailing JSON values return HTTP 400.
+
+With verification enabled, unsupported readback is rejected before sending.
+FIR408 mute readback is observed only for InD and Out8; use `verify: false` for
+ACK-only mute writes on other FIR408 channels. Both endpoints also accept the
+`/api/v1/dsps/{dspId}` prefix to address a specific DSP.
+
+| Result | HTTP | Meaning |
+| --- | --- | --- |
+| `ACKNOWLEDGED` | 200 | The DSP acknowledged the write; no readback verification was requested. |
+| `VERIFIED` | 200 | A fresh device readback matches the normalized value. |
+| `REJECTED` | 409 / 422 / 503 | Disconnected or unsupported operation / invalid input / command admission overload; nothing was transmitted. |
+| `UNCERTAIN` | 502 / 409 / 503 | Transport or readback failure / readback mismatch / readback overload after ACK; the write may have taken effect. |
+
+Every runtime result includes a correlation `requestId`, target DSP/channel,
+parameter, requested and normalized values, status, `acknowledged`, nullable
+`transmitted`, optional `readback`, `errorCode`, `message` and completion time.
+`transmitted: null` means sending may have occurred. Readback includes its block,
+fresh receive revision and observation time. An ACK alone never produces
+`VERIFIED`. Requests are not retried or rolled back automatically; request IDs
+are not idempotency keys. Body validation and older providers retain the
+standard HTTP error envelope. Existing v1 control response shapes are unchanged.
 
 ## Build
 

@@ -78,14 +78,20 @@ PID is never stopped. Offline tests exercise both paths with harmless children.
    temporarily lengthen its meter interval to exercise two scheduled idle
    keepalives, restore normal polling, drop its transport, observe disconnected
    state and connect again.
-7. Record final memory/thread snapshots, bundle/service state, command and HTTP
+7. Read capabilities without connecting, then connect a separate loopback emulator.
+   Exercise ACK-only and verified Out8 gain/mute/phase/delay writes over HTTP,
+   enforce evidence/range preflight before transmission, and require a full
+   refresh to restore the settings snapshot after parameter writes.
+8. Record final memory/thread snapshots, bundle/service state, command and HTTP
    timings, fixture command counts, artifact provenance and shutdown evidence.
 
-The fixture validates frame length/checksum and accepts only session, discovery,
-read and keepalive requests. Audio, preset and firmware writes are rejected,
-recorded and make the run fail. The fixtures contain synthetic zero-filled
-blocks; this validates transport and lifecycle behavior, not acoustic settings
-or hardware decoding accuracy. Intentional cancelled/dropped bootstraps produce
+All fixtures validate frame length/checksum and bind only to loopback. The
+default fixtures accept session, discovery, read and keepalive requests. A
+separate explicitly enabled emulator accepts only the four modeled Out8 controls
+and mutates synthetic block bytes at literal, independently specified offsets.
+Preset, FIR and unmodeled control writes remain rejected and make the run fail.
+No fixture forwards traffic to hardware. This validates transport, lifecycle
+and API behavior, not acoustic settings or physical decoding accuracy. Intentional cancelled/dropped bootstraps produce
 HTTP error responses and log errors retained in the report. Their presence in
 a final doctor log summary does not negate the explicitly checked recovery.
 

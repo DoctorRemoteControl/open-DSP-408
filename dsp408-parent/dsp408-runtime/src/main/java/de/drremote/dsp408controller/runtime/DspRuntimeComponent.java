@@ -10,6 +10,10 @@ import org.osgi.service.metatype.annotations.Designate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import de.drremote.dsp408.api.CapabilitiesDto;
+import de.drremote.dsp408.api.ParameterWriteRequestDto;
+import de.drremote.dsp408.api.ParameterWriteResultDto;
+import de.drremote.dsp408.api.ParameterWriteStatus;
 import de.drremote.dsp408.api.BlockDto;
 import de.drremote.dsp408.api.AutoLimitLeaseDto;
 import de.drremote.dsp408.api.AutoLimitStatusDto;
@@ -52,6 +56,10 @@ public final class DspRuntimeComponent implements DspService {
             controller,
             this::startCentralMeterPolling
     );
+    private final DspParameterCapabilities parameterCapabilities = new DspParameterCapabilities(
+            controller, this::dspId);
+    private final DspParameterWrites parameterWrites = new DspParameterWrites(
+            controller, transactions, this::dspId);
     private final DspDynamicsCommands dynamics = new DspDynamicsCommands(
             controller,
             dtoMapper,
@@ -248,6 +256,28 @@ public final class DspRuntimeComponent implements DspService {
     @Override
     public DeviceInfoDto getDeviceInfo() {
         return stateQueries.deviceInfo();
+    }
+
+    @Override
+    public CapabilitiesDto getCapabilities() {
+        return parameterCapabilities.get();
+    }
+
+    @Override
+    public ParameterWriteResultDto writeParameter(ParameterWriteRequestDto request) {
+        ParameterWriteResultDto result = parameterWrites.write(request);
+        if (result.status() != ParameterWriteStatus.REJECTED) {
+            autoLimit.invalidateUndo();
+            if (controller.isConnected()) {
+                // Verification covers one parameter, not every raw block in the
+                // complete settings snapshot or possible linked-device effects.
+                settingsCache.markStale("A parameter write may have changed the device; "
+                        + "refresh the full snapshot before treating it as authoritative.");
+            } else {
+                settingsCache.markDisconnected();
+            }
+        }
+        return result;
     }
 
     @Override

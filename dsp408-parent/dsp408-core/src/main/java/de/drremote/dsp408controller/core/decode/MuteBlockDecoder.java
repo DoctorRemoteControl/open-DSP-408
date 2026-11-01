@@ -4,6 +4,7 @@ import java.util.Locale;
 import java.util.function.Consumer;
 
 import de.drremote.dsp408controller.core.library.DspLibrary;
+import de.drremote.dsp408controller.core.library.DspMuteReadEvidence;
 import de.drremote.dsp408controller.core.library.MuteReadSpec;
 import de.drremote.dsp408controller.core.protocol.DspChannel;
 import de.drremote.dsp408controller.core.state.DspState;
@@ -12,11 +13,13 @@ public final class MuteBlockDecoder implements BlockDecoder {
     private final DspState state;
     private final Consumer<String> log;
     private final MuteReadSpec spec;
+    private final DspLibrary library;
 
     public MuteBlockDecoder(DspState state, Consumer<String> log, DspLibrary library) {
         this.state = state;
         this.log = log;
         this.spec = library.muteReadSpec();
+        this.library = library;
     }
 
     @Override
@@ -35,19 +38,16 @@ public final class MuteBlockDecoder implements BlockDecoder {
         int inputMask = readUInt8(data, spec.inputDataOffset());
         int outputMask = readUInt8(data, spec.outputDataOffset());
 
-        state.markMutedFromDevice(DspChannel.IN_A, (inputMask & (1 << 0)) != 0, maskSource(spec.inputDataOffset()));
-        state.markMutedFromDevice(DspChannel.IN_B, (inputMask & (1 << 1)) != 0, maskSource(spec.inputDataOffset()));
-        state.markMutedFromDevice(DspChannel.IN_C, (inputMask & (1 << 2)) != 0, maskSource(spec.inputDataOffset()));
-        state.markMutedFromDevice(DspChannel.IN_D, (inputMask & (1 << 3)) != 0, maskSource(spec.inputDataOffset()));
-
-        state.markMutedFromDevice(DspChannel.OUT_1, (outputMask & (1 << 0)) != 0, maskSource(spec.outputDataOffset()));
-        state.markMutedFromDevice(DspChannel.OUT_2, (outputMask & (1 << 1)) != 0, maskSource(spec.outputDataOffset()));
-        state.markMutedFromDevice(DspChannel.OUT_3, (outputMask & (1 << 2)) != 0, maskSource(spec.outputDataOffset()));
-        state.markMutedFromDevice(DspChannel.OUT_4, (outputMask & (1 << 3)) != 0, maskSource(spec.outputDataOffset()));
-        state.markMutedFromDevice(DspChannel.OUT_5, (outputMask & (1 << 4)) != 0, maskSource(spec.outputDataOffset()));
-        state.markMutedFromDevice(DspChannel.OUT_6, (outputMask & (1 << 5)) != 0, maskSource(spec.outputDataOffset()));
-        state.markMutedFromDevice(DspChannel.OUT_7, (outputMask & (1 << 6)) != 0, maskSource(spec.outputDataOffset()));
-        state.markMutedFromDevice(DspChannel.OUT_8, (outputMask & (1 << 7)) != 0, maskSource(spec.outputDataOffset()));
+        for (DspChannel channel : DspChannel.values()) {
+            if (!DspMuteReadEvidence.supports(library, channel)) {
+                continue;
+            }
+            boolean input = channel.index() < 4;
+            int bit = input ? channel.index() : channel.index() - 4;
+            int mask = input ? inputMask : outputMask;
+            state.markMutedFromDevice(channel, (mask & (1 << bit)) != 0,
+                    maskSource(input ? spec.inputDataOffset() : spec.outputDataOffset()));
+        }
 
         if (log != null) {
             log.accept(String.format(

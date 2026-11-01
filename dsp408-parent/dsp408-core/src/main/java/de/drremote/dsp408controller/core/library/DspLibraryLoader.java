@@ -313,7 +313,9 @@ public final class DspLibraryLoader {
         channels.fields().forEachRemaining(entry -> {
             DspChannel channel = DspChannel.parse(entry.getKey());
             JsonNode node = entry.getValue();
-            if (!readEvidenceAllowed(root, node, read)) {
+            // Delay has explicit per-channel evidence in both libraries. The
+            // DSP408 map includes two predictions despite its legacy permissive policy.
+            if (!evidenceStatusConfirmed(node.path("status").asText(read.path("status").asText(null)))) {
                 return;
             }
 

@@ -91,9 +91,11 @@ def read_frame(client):
 
 
 class FakeDsp:
-    """Length/checksum checked read-only FIR408 fixture, never a device proxy."""
-    def __init__(self, mode="healthy", fragment=False, delay=0.0):
+    """Loopback FIR408 fixture; writes require explicit synthetic Out8 emulation."""
+    def __init__(self, mode="healthy", fragment=False, delay=0.0, allow_parameter_writes=False):
         self.mode, self.fragment, self.delay = mode, fragment, delay
+        self.allow_parameter_writes = allow_parameter_writes
+        self.blocks = [bytearray(50) for _ in range(32)]
         self.requests, self.forbidden, self.errors = [], [], []
         self.connections = 0
         self.server = socket.socket()
@@ -164,8 +166,12 @@ class FakeDsp:
                 command = payload[3]
                 lengths = {0x10: 4, 0x13: 4, 0x2C: 4, 0x22: 4, 0x14: 4,
                            0x29: 5, 0x56: 7, 0x27: 5, 0x12: 4, 0x40: 4}
+                if self.allow_parameter_writes:
+                    lengths.update({0x34: 7, 0x35: 6, 0x36: 6, 0x38: 7})
+                control = command in (0x34, 0x35, 0x36, 0x38)
                 if (payload[:2] != b"\x00\x01" or len(payload) != lengths.get(command)
-                        or payload[2] != len(payload) - 3):
+                        or payload[2] != len(payload) - 3
+                        or (control and payload[4] != 11)):
                     self.forbidden.append(payload.hex())
                     break
                 if self.mode == "drop":
@@ -173,7 +179,19 @@ class FakeDsp:
                 if self.mode == "silent":
                     continue
                 if command == 0x27:
-                    reply = bytes([1, 0, 0x34, 0x24, payload[4]]) + bytes(50)
+                    reply = bytes([1, 0, 0x34, 0x24, payload[4]]) + self.blocks[payload[4]]
+                elif command == 0x13:
+                    reply = b"\x01\x00\x0e\x13FIR408 V0113P"
+                elif control:
+                    # Independent FIR408 Out8 fixture: payload offsets 29/31/33/39,
+                    # corresponding to block data offsets 24/26/28/34.
+                    block = self.blocks[0x1C]
+                    if command == 0x35:
+                        block[34] = (block[34] & 0x7F) | (0x80 if payload[5] else 0)
+                    else:
+                        offset = {0x34: 24, 0x36: 26, 0x38: 28}[command]
+                        block[offset:offset + 2] = payload[5:7] if command != 0x36 else bytes([payload[5], 0])
+                    reply = bytes.fromhex("01000101")
                 elif command == 0x29:
                     reply = bytes([1, 0, 2, command, payload[4]])
                 elif command == 0x40:
@@ -254,11 +272,11 @@ class Validation:
             raise RuntimeError(f"Karaf {action} failed: {report}")
         return report
 
-    def http(self, path, method="GET", timeout=10):
+    def http(self, path, method="GET", timeout=10, body=None):
         started = time.monotonic()
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.ports['http']}/api/v1" + path,
-            data=b"{}" if method == "POST" else None, method=method,
+            data=json.dumps(body if body is not None else {}).encode() if method == "POST" else None, method=method,
             headers={"Content-Type": "application/json"})
         try:
             response = urllib.request.urlopen(request, timeout=timeout)
@@ -380,6 +398,62 @@ class Validation:
             raise AssertionError("Runtime did not accept its loopback DSP configuration")
         self.result["dspService"] = matches[0]
 
+    def parameter_api(self, peer):
+        prefix = "/dsps/writable"
+        connected = self.http(prefix + "/connection/connect", "POST", 60)
+        if connected["status"] != 200:
+            raise AssertionError(f"Writable emulator bootstrap failed: {connected}")
+        capabilities = self.http(prefix + "/capabilities")
+        caps = capabilities["body"]
+        if (capabilities["status"] != 200 or not caps.get("firmwareRecognized")
+                or caps.get("deviceVersion") != "FIR408 V0113P"
+                or len(caps.get("channels", [])) != 12):
+            raise AssertionError(f"Wrong connected capabilities: {capabilities}")
+        parameters = [p for c in caps["channels"] for p in c["parameters"]]
+        if (len(parameters) != 48 or not all(p["writable"] for p in parameters)
+                or sum(p["readbackSupported"] for p in parameters if p["name"] == "mute") != 2):
+            raise AssertionError("Capabilities must preserve FIR readback evidence")
+        outcomes = []
+        for parameter, value, verify, normalized in (
+                ("gain", -6, False, -6), ("gain", 0.04, True, 0.0),
+                ("phase", True, True, True), ("delay", 20, True, 20.0),
+                ("mute", True, True, True)):
+            result = self.http(prefix + "/parameters/write", "POST", body={
+                "channelId": "out8", "parameter": parameter, "value": value, "verify": verify})
+            body = result["body"]
+            expected = "VERIFIED" if verify else "ACKNOWLEDGED"
+            if (result["status"] != 200 or body.get("status") != expected
+                    or body.get("normalizedValue") != normalized
+                    or body.get("requestedValue") != value or body.get("dspId") != "writable"
+                    or not body.get("acknowledged") or body.get("transmitted") is not True):
+                raise AssertionError(f"Incorrect parameter result: {result}")
+            if verify and (body["readback"]["value"] != normalized
+                           or body["readback"]["receiveRevision"] <= 0
+                           or body["readback"]["observedAtEpochMs"] <= 0):
+                raise AssertionError(f"Missing authoritative readback: {result}")
+            if self.http(prefix + "/settings-cache")["body"].get("phase") != "STALE":
+                raise AssertionError("One parameter result must not certify the full settings snapshot")
+            outcomes.append(body["status"])
+        # Compare control requests only: central meter polling is deliberately live.
+        controls = lambda: sum(r[6:8] in ("34", "35", "36", "38") for r in peer.requests)
+        before = controls()
+        for request, code, error in (
+                ({"channelId": "out8", "parameter": "gain", "value": 13}, 422, "invalid_input"),
+                ({"channelId": "out1", "parameter": "mute", "value": True}, 409, "readback_unsupported")):
+            rejected = self.http(prefix + "/parameters/write", "POST", body=request)
+            if (rejected["status"] != code or rejected["body"].get("errorCode") != error
+                    or rejected["body"].get("status") != "REJECTED"
+                    or rejected["body"].get("transmitted") is not False):
+                raise AssertionError(f"Incorrect preflight rejection: {rejected}")
+        if controls() != before:
+            raise AssertionError("Rejected preflight produced a control command")
+        refreshed = self.http(prefix + "/refresh", "POST", 60)
+        if refreshed["status"] != 200 or not self.http(prefix + "/settings-cache")["body"].get("ready"):
+            raise AssertionError(f"Explicit full refresh did not restore READY: {refreshed}")
+        self.http(prefix + "/connection/disconnect", "POST")
+        self.result["parameterApi"] = {"simulatedOnly": True, "outcomes": outcomes,
+                                       "controlRequests": controls(), "preflightSentNothing": True}
+
     def run(self, peers):
         descriptor = self.inventory()
         self.control("start")
@@ -443,6 +517,12 @@ class Validation:
             item = self.http(path)
             if item["status"] != 200:
                 raise AssertionError(f"HTTP route failed: {item}")
+        offline = self.http("/capabilities")
+        if (offline["status"] != 200 or offline["body"].get("connected")
+                or len(offline["body"].get("channels", [])) != 12
+                or any(p["writable"] for c in offline["body"]["channels"] for p in c["parameters"])
+                or any(peer.connections for peer in peers.values())):
+            raise AssertionError(f"Offline capabilities must be side-effect free: {offline}")
         # Batch sessions do not render a Gogo command's return value. Echo it
         # explicitly so a successful SSH exit cannot hide a missing shell path.
         shell = self.control("exec", "shell:echo (dsp408:connected)").get("data", "")
@@ -517,6 +597,7 @@ class Validation:
             disconnected = self.http("/connection/disconnect", "POST")
             if disconnected["status"] != 200:
                 raise AssertionError(f"Disconnect failed: {disconnected}")
+        self.parameter_api(peers["writable"])
         self.control("exec", "shell:echo (dsp408:connected)")
         self.control("features")
         self.control("memory")
@@ -607,7 +688,8 @@ def main(argv=None):
         with ExitStack() as stack:
             peers = {"healthy": stack.enter_context(FakeDsp(fragment=True, delay=0.002)),
                      "silent": stack.enter_context(FakeDsp(mode="silent")),
-                     "drop": stack.enter_context(FakeDsp(mode="drop"))}
+                     "drop": stack.enter_context(FakeDsp(mode="drop")),
+                     "writable": stack.enter_context(FakeDsp(allow_parameter_writes=True))}
             try:
                 validation.provision(peers)
                 validation.run(peers)

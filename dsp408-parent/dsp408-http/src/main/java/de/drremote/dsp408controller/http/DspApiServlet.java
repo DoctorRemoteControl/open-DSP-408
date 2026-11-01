@@ -31,6 +31,7 @@ public final class DspApiServlet extends HttpServlet {
     private final DspHttpRequestParser requestParser = new DspHttpRequestParser(mapper);
     private final DspHttpResponses responses = new DspHttpResponses(mapper);
     private final DspGetRouteHandler getRoutes = new DspGetRouteHandler(responses);
+    private final DspParameterPostHandler parameterPosts = new DspParameterPostHandler(mapper, responses);
     private final JsonPresetApplier presetApplier = new JsonPresetApplier();
     private final DspAdministrationPostHandler administrationPosts = new DspAdministrationPostHandler(
             requestParser,
@@ -119,6 +120,10 @@ public final class DspApiServlet extends HttpServlet {
             RequestContext context = requestContext(req);
             String path = context.path();
             DspService dsp = context.dsp();
+
+            if (parameterPosts.handle(path, dsp, req, resp)) {
+                return;
+            }
 
             if (administrationPosts.handle(path, dsp, req, resp)) {
                 return;

@@ -2,11 +2,35 @@ package de.drremote.dsp408controller.core.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 class DspStateBlockRevisionTest {
+    @Test
+    void receivedSnapshotKeepsOriginalBytesRevisionAndTimeAcrossOptimisticPatches() {
+        DspState state = new DspState();
+        byte[] received = {1, 2};
+        state.storeBlock(2, received);
+        received[0] = 9;
+        var snapshot = state.receivedBlock(2);
+        state.patchCachedBlockUInt16LE(2, 0, 280);
+        assertArrayEquals(new byte[]{1, 2}, snapshot.data());
+        byte[] exposed = snapshot.data();
+        exposed[0] = 9;
+        assertArrayEquals(new byte[]{1, 2}, state.receivedBlock(2).data());
+        assertEquals(state.blockRevision(2), snapshot.receiveRevision());
+        assertTrue(snapshot.observedAtEpochMs() > 0);
+        state.clearCachedBlocks();
+        assertNull(state.receivedBlock(2));
+        state.storeBlock(2, new byte[]{3});
+        assertTrue(state.receivedBlock(2).receiveRevision() > snapshot.receiveRevision());
+        state.reset();
+        assertNull(state.receivedBlock(2));
+    }
+
 
     @Test
     void distinguishesFreshBlockRepliesFromCachedData() {

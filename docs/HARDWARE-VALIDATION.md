@@ -106,3 +106,39 @@ The Git repository records these measured aggregates rather than publishing the
 live device's full configuration. The run covers this FIR408 V0113P and this
 host/network path. It does not validate audio writes, preset flash timing or
 other firmware. No audio, preset or firmware settings were changed.
+
+## Parameter API readback check, 2026-11-01
+
+The parameter API build was also checked directly against the connected
+FIR408 V0113P through the same exact read-only guard. Its captured profile
+reported 48 parameter descriptors. All **38 supported readbacks** completed
+with fresh receive revisions; the **10 inferred FIR mute mappings** rejected
+readback before sending. Two complete 32-block snapshots and every intervening
+received parameter block agreed byte-for-byte. The configuration digest remained
+`b0013872dd13b9d52fc266dddfd742114c549b5ce964bd472dc77fb84adc9cd2`.
+
+The check took **8.304 seconds**, with **138 outgoing requests**, **140 incoming
+frames** and **138 matching responses**. Median response was 56.807 ms, p95
+66.401 ms and maximum 102.162 ms. The guard recorded no errors, no open owned
+sockets and no remaining proxy threads; Java stopped. No control, preset or
+firmware write passed the guard.
+
+This checks actual-device identity, block freshness, readback execution and
+configuration preservation. A stable read value alone does not independently
+establish its physical meaning or validate an audio write. The supported
+location evidence remains the captured protocol evidence; new write-result
+failure paths are exercised by controlled loopback peers.
+
+The older Raider meter emulator is not used as a reference for the physical
+FIR408 or to authorize mappings. It advertises DSP408 V0104, supplies static
+metadata/block responses and does not handle gain/mute/phase/delay control
+writes. The new Karaf test peer is likewise a bounded software fixture, not a
+complete hardware model. Its results are explicitly separate from this live
+read-only check.
+
+The exact probe source, copied JARs, block snapshots, readback values and wire
+log are preserved locally under:
+
+```text
+Archiv/DSP408/controller-parameter-api-20261101/
+```

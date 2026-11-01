@@ -41,6 +41,38 @@ class ProvisioningTest(unittest.TestCase):
 
 
 class FakeDspTest(unittest.TestCase):
+    def test_fixture_identifies_the_exact_fir_firmware(self):
+        with smoke.FakeDsp() as peer:
+            with socket.create_connection(("127.0.0.1", peer.port), timeout=2) as client:
+                smoke.read_frame(client)
+                client.sendall(smoke.encode_frame(bytes.fromhex("00010113")))
+                self.assertEqual(b"\x01\x00\x0e\x13FIR408 V0113P", smoke.read_frame(client))
+
+    def test_parameter_emulator_updates_independent_out8_block_offsets(self):
+        with smoke.FakeDsp(allow_parameter_writes=True) as peer:
+            with socket.create_connection(("127.0.0.1", peer.port), timeout=2) as client:
+                smoke.read_frame(client)
+                # Literal protocol fixtures; do not reuse the production catalog.
+                for payload in ("000104340bdc00", "000103350b01",
+                                "000103360b01", "000104380b8007"):
+                    client.sendall(smoke.encode_frame(bytes.fromhex(payload)))
+                    self.assertEqual(bytes.fromhex("01000101"), smoke.read_frame(client))
+                client.sendall(smoke.encode_frame(bytes.fromhex("000102271c")))
+                reply = smoke.read_frame(client)
+                self.assertEqual(bytes.fromhex("dc0001008007"), reply[29:35])
+                self.assertEqual(0x80, reply[39])
+                self.assertEqual(55, len(reply))
+        self.assertFalse(peer.forbidden)
+        self.assertFalse(peer.errors)
+
+    def test_default_peer_rejects_parameter_writes(self):
+        with smoke.FakeDsp() as peer:
+            with socket.create_connection(("127.0.0.1", peer.port), timeout=2) as client:
+                smoke.read_frame(client)
+                client.sendall(smoke.encode_frame(bytes.fromhex("000104340bdc00")))
+                self.assertEqual(b"", client.recv(1))
+        self.assertEqual(["000104340bdc00"], peer.forbidden)
+
     def test_keepalive_uses_the_generic_ack_expected_by_controller(self):
         with smoke.FakeDsp() as peer:
             with socket.create_connection(("127.0.0.1", peer.port), timeout=2) as client:

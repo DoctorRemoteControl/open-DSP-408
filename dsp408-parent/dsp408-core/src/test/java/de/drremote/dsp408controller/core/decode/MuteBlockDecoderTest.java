@@ -1,6 +1,7 @@
 package de.drremote.dsp408controller.core.decode;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -11,6 +12,21 @@ import de.drremote.dsp408controller.core.state.ChannelState;
 import de.drremote.dsp408controller.core.state.DspState;
 
 class MuteBlockDecoderTest {
+    @Test
+    void inferredFirMuteBitsCannotConfirmOrOverwritePendingWrites() {
+        DspState state = new DspState();
+        state.markMuted(DspChannel.IN_A, true, "tx");
+        state.markMuted(DspChannel.OUT_1, true, "tx");
+
+        new MuteBlockDecoder(state, null, DspLibraryLoader.loadFir408()).decode(0x1C, new byte[50]);
+
+        for (DspChannel channel : new DspChannel[]{DspChannel.IN_A, DspChannel.OUT_1}) {
+            assertTrue(state.channel(channel).muted());
+            assertTrue(state.channel(channel).muteDirty());
+            assertFalse(state.channel(channel).muteConfirmedFromDevice());
+        }
+    }
+
     @Test
     void observedFir408ReadbackUpdatesInputAndOutputMuteState() {
         DspState state = new DspState();
@@ -26,9 +42,11 @@ class MuteBlockDecoderTest {
         ChannelState out1 = state.channel(DspChannel.OUT_1);
         ChannelState out8 = state.channel(DspChannel.OUT_8);
 
-        assertFalse(inA.muted());
+        assertNull(inA.muted());
         assertTrue(inD.muted());
-        assertFalse(out1.muted());
+        assertNull(out1.muted());
+        assertFalse(inA.muteConfirmedFromDevice());
+        assertFalse(out1.muteConfirmedFromDevice());
         assertTrue(out8.muted());
         assertFalse(inD.muteDirty());
         assertFalse(out8.muteDirty());

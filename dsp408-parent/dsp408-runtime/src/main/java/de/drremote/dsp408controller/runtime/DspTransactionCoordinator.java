@@ -4,6 +4,7 @@ import java.util.Locale;
 
 import de.drremote.dsp408controller.core.net.DspTrafficSnapshot;
 import de.drremote.dsp408controller.core.service.DspController;
+import de.drremote.dsp408controller.core.service.DspNotConnectedException;
 
 /**
  * Owns runtime-level DSP transactions which span more than one protocol
@@ -30,14 +31,24 @@ final class DspTransactionCoordinator {
             DspTrafficSnapshot before = controller.trafficSnapshot();
             boolean resumeMeterPolling = before.centralMeterPolling();
             if (resumeMeterPolling) {
-                controller.stopMeterPolling();
+                try {
+                    controller.stopMeterPolling();
+                } catch (DspNotConnectedException disconnected) {
+                    // A concurrent close already stopped this session's tasks.
+                    // Let the operation perform its own connection preflight.
+                }
             }
 
             try {
                 return action.get();
             } finally {
                 if (resumeMeterPolling && controller.isConnected()) {
-                    meterPollingStarter.run();
+                    try {
+                        meterPollingStarter.run();
+                    } catch (DspNotConnectedException disconnected) {
+                        // Disconnect after the connectivity check is expected
+                        // cleanup, and must not replace an ACK or I/O failure.
+                    }
                 }
             }
         }
