@@ -16,6 +16,7 @@
         <module>dsp408-matrix</module>
         <module>dsp408-http</module>
         <module>dsp408-features</module>
+        <module>dsp408-server</module>
     </modules>
 
     <properties>

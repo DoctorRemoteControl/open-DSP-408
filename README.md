@@ -9,6 +9,13 @@ Use the [headless Java server](docs/HEADLESS-SERVER.md) to register and control
 multiple DSPs through its persistent HTTP API. The server runs without a display
 or browser. The [mobile LAN controller](docs/MOBILE-LAN-APP.md) is optional.
 
+## Install a server
+
+Use the [server archive and systemd instructions](docs/SERVER-INSTALLATION.md)
+for an offline-installable Java server with persistent state, updates and rollback.
+Successful CI runs provide tar.gz/ZIP build artifacts with source provenance and
+checksums. No source build or browser runtime is needed on the installed host.
+
 ## Build and test
 
 Use Java 21, Maven, Git, Bash and Python 3. This independent checkout builds
@@ -61,6 +68,7 @@ do not contact the physical DSP. In the complete local DSP408 workspace,
 
 ## Documentation
 
+- [Install, update and run a service](docs/SERVER-INSTALLATION.md)
 - [Headless server and device registry](docs/HEADLESS-SERVER.md)
 - [Mobile LAN controller](docs/MOBILE-LAN-APP.md)
 - [Control latency and network-fault evidence](docs/LATENCY-VALIDATION.md)

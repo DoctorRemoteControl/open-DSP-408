@@ -69,7 +69,9 @@ jobs:
 
       - name: Verify integration tooling
         working-directory: open-DSP-408
-        run: python3 -m unittest discover -s integration -p 'test_*.py'
+        run: |
+          python3 -m unittest discover -s integration -p 'test_*.py'
+          python3 -m unittest discover -s tests -p 'test_*.py'
 
       - name: Stress loopback connection lifecycle
         working-directory: open-DSP-408
@@ -91,3 +93,25 @@ jobs:
           --maven-repo "${{ runner.temp }}/dsp408-m2"
           --state-dir "${{ runner.temp }}/dsp408-karaf-smoke"
           --browser-check
+
+      - name: Verify installable offline server
+        run: >-
+          python3 open-DSP-408/integration/server-package-smoke.py
+          --archive open-DSP-408/dsp408-parent/dsp408-server/target/dsp408-server-*.tar.gz
+          --state-dir "${{ runner.temp }}/dsp408-server-package"
+
+      - name: Hash server downloads
+        working-directory: open-DSP-408/dsp408-parent/dsp408-server/target
+        run: sha256sum dsp408-server-*.tar.gz dsp408-server-*.zip > dsp408-server-SHA256SUMS.txt
+
+      - name: Upload installable server
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dsp408-server-${{ github.sha }}
+          path: |
+            open-DSP-408/dsp408-parent/dsp408-server/target/dsp408-server-*.tar.gz
+            open-DSP-408/dsp408-parent/dsp408-server/target/dsp408-server-*.zip
+            open-DSP-408/dsp408-parent/dsp408-server/target/dsp408-server-SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

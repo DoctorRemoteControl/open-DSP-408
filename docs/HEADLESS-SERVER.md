@@ -9,6 +9,10 @@ current protocol contract.
 
 ## Install
 
+For the complete offline archive, persistent service and rollback, follow
+[server installation](SERVER-INSTALLATION.md). The feature-level instructions
+below are for an existing Karaf host.
+
 Build the pinned protocol and Controller sources with [`ci/verify.sh`](../ci/verify.sh).
 Install the resulting features in Apache Karaf 4.4.11 on Java 21:
 
