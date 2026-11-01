@@ -15,6 +15,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -118,33 +120,35 @@ class DspParameterSessionTest {
         CountDownLatch blocked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         try (Peer peer = new Peer((input, output) -> {
-            assertEquals(0x27, read(input)[3] & 255);
+            // Hold a real ACK-requiring command with a ten-second response budget,
+            // so producer scheduling does not consume a one-second read deadline.
+            assertEquals(0x21, read(input)[3] & 255);
             blocked.countDown();
-            assertTrue(release.await(2, TimeUnit.SECONDS));
-            write(output, block(0, new byte[50]));
+            assertTrue(release.await(5, TimeUnit.SECONDS));
+            write(output, new byte[]{1, 0, 1, 1});
             assertArrayEquals(new byte[]{0, 1, 4, 0x34, 0, (byte) 250, 0}, read(input));
             write(output, new byte[]{1, 0, 1, 1});
-        })) {
+        }); ExecutorService calls = Executors.newFixedThreadPool(3)) {
             DspController controller = peer.connect();
-            CompletableFuture<Void> active = CompletableFuture.runAsync(() -> {
-                try { controller.readParameterBlock(0); } catch (IOException error) { throw new RuntimeException(error); }
+            var active = calls.submit(() -> {
+                try { controller.storePreset(1); } catch (IOException error) { throw new RuntimeException(error); }
             });
             assertTrue(blocked.await(1, TimeUnit.SECONDS));
-            CompletableFuture<Void> canceled = CompletableFuture.runAsync(() ->
+            var canceled = calls.submit(() ->
                     assertThrows(CancellationException.class,
                             () -> controller.openParameterSession().write(DspChannel.IN_A, DspParameter.GAIN, -6.0)));
             awaitPending(controller);
-            CompletableFuture<Void> replacement = CompletableFuture.runAsync(() -> {
+            var replacement = calls.submit(() -> {
                 try { controller.setGain(DspChannel.IN_A, -3); } catch (IOException error) { throw new RuntimeException(error); }
             });
             try {
-                canceled.get(1, TimeUnit.SECONDS);
+                canceled.get(2, TimeUnit.SECONDS);
                 assertNull(controller.state().channel(DspChannel.IN_A).gainDb());
             } finally {
                 release.countDown();
             }
-            active.get(1, TimeUnit.SECONDS);
-            replacement.get(1, TimeUnit.SECONDS);
+            active.get(2, TimeUnit.SECONDS);
+            replacement.get(2, TimeUnit.SECONDS);
         } finally {
             release.countDown();
         }

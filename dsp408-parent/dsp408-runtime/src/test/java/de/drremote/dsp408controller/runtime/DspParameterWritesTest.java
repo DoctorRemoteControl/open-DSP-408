@@ -434,7 +434,7 @@ class DspParameterWritesTest {
             assertEquals(65, received.size());
             assertControl(read(input), 0x34, 11, 157);
             ack(output);
-        }); ExecutorService producers = Executors.newVirtualThreadPerTaskExecutor()) {
+        }); ExecutorService producers = Executors.newFixedThreadPool(2)) {
             DspTransactionCoordinator coordinator = new DspTransactionCoordinator(peer.controller, () -> { });
             DspParameterWrites writer = new DspParameterWrites(peer.controller, coordinator, () -> "test-dsp");
             List<Thread> waiting = new ArrayList<>();
@@ -461,7 +461,13 @@ class DspParameterWritesTest {
                     waiting.add(thread);
                     thread.start();
                 }
-                await(() -> waiting.stream().allMatch(thread -> thread.getState() == Thread.State.BLOCKED));
+                // BLOCKED alone can mean UUID/SecureRandom initialization before
+                // admission. Require every producer to have acquired its permit
+                // and reached the actual shared transaction monitor.
+                await(() -> waiting.stream().allMatch(thread -> thread.getState() == Thread.State.BLOCKED
+                        && java.util.Arrays.stream(thread.getStackTrace()).anyMatch(frame ->
+                        frame.getClassName().equals(DspTransactionCoordinator.class.getName())
+                                && frame.getMethodName().equals("withMetersPaused"))));
 
                 var excess = producers.submit(() -> writer.write(
                         new ParameterWriteRequestDto("Out8", "gain", 12.0, false)));
