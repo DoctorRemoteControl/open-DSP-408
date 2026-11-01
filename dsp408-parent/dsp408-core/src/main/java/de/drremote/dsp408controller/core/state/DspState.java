@@ -652,6 +652,28 @@ public final class DspState {
     }
 
     /**
+     * Mirrors one bit of a server-originated write into an already cached block.
+     * The receive revision stays unchanged because no physical readback occurred.
+     */
+    public synchronized boolean patchCachedBlockBit(
+            int blockIndex,
+            int dataOffset,
+            int mask,
+            boolean enabled
+    ) {
+        byte[] data = lastBlocks.get(blockIndex & 0xFF);
+        if (data == null || dataOffset < 0 || dataOffset >= data.length) {
+            return false;
+        }
+        int normalizedMask = mask & 0xFF;
+        int current = data[dataOffset] & 0xFF;
+        data[dataOffset] = (byte) (enabled
+                ? current | normalizedMask
+                : current & ~normalizedMask);
+        return true;
+    }
+
+    /**
      * Monotonically increasing receive revision for a parameter block.
      * A caller can record the value before requesting a block and wait until it
      * changes instead of mistaking an old cache entry for a fresh DSP reply.

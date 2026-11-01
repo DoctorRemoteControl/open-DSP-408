@@ -2,13 +2,20 @@ package de.drremote.dsp408controller.runtime;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Set;
 
 import de.drremote.dsp408controller.core.protocol.DspChannel;
 import de.drremote.dsp408controller.core.service.DspController;
 import de.drremote.dsp408controller.core.state.ChannelState;
+import de.drremote.dsp408controller.core.state.LimiterState;
 
 public final class VolumeRoomHandler {
+    private static final double LIMITER_STEP_DB = 1.0;
+    private static final double MIN_LIMITER_DB = -90.0;
+    private static final double MAX_LIMITER_DB = 20.0;
+
     private static final DspChannel[] INPUT_CHANNELS = {
             DspChannel.IN_A,
             DspChannel.IN_B,
@@ -64,12 +71,83 @@ public final class VolumeRoomHandler {
         }
 
         return runtime.withController(controller -> {
+            if (isLimiterCommand(cmd)) {
+                return handleLimiterCommand(controller, parts);
+            }
             if (isTargetToken(parts[0])) {
                 return handleTargetCommand(controller, parts);
             }
             String arg = parts.length > 1 ? parts[1] : "";
             return handleLegacyCommand(controller, cmd, arg);
         });
+    }
+
+    private String handleLimiterCommand(DspController controller, String[] parts) throws Exception {
+        ensureConnected();
+        String action = parts.length > 1 ? normalizeWord(parts[1]) : "status";
+
+        if (action.equals("status")) {
+            ensureKnownLimiters(controller, OUTPUT_CHANNELS);
+            return formatLimiterStatus(controller, OUTPUT_CHANNELS);
+        }
+        if (action.equals("+") || action.equals("up") || action.equals("hoeher")) {
+            return changeLimiterBy(controller, OUTPUT_CHANNELS, LIMITER_STEP_DB);
+        }
+        if (action.equals("-") || action.equals("down") || action.equals("tiefer")) {
+            return changeLimiterBy(controller, OUTPUT_CHANNELS, -LIMITER_STEP_DB);
+        }
+        if (isSignedNumber(parts[1])) {
+            return changeLimiterBy(
+                    controller,
+                    OUTPUT_CHANNELS,
+                    parseLimiterDbDelta(parts[1], "limiter <+dB|-dB>")
+            );
+        }
+        if (action.equals("set")) {
+            String value = parts.length > 2 ? parts[2] : "";
+            return setLimiterThreshold(
+                    controller,
+                    OUTPUT_CHANNELS,
+                    parseLimiterDb(value, "limiter set <dB>")
+            );
+        }
+
+        DspChannel output;
+        try {
+            output = limiterOutput(parts[1]);
+        } catch (IllegalArgumentException ignored) {
+            return limiterUsage();
+        }
+
+        String outputAction = parts.length > 2 ? normalizeWord(parts[2]) : "status";
+        if (outputAction.equals("status")) {
+            ensureKnownLimiters(controller, new DspChannel[]{output});
+            return formatLimiterStatus(controller, new DspChannel[]{output});
+        }
+        if (outputAction.equals("+") || outputAction.equals("up") || outputAction.equals("hoeher")) {
+            return changeLimiterBy(controller, new DspChannel[]{output}, LIMITER_STEP_DB);
+        }
+        if (outputAction.equals("-") || outputAction.equals("down") || outputAction.equals("tiefer")) {
+            return changeLimiterBy(controller, new DspChannel[]{output}, -LIMITER_STEP_DB);
+        }
+        if (outputAction.equals("set")) {
+            String value = parts.length > 3 ? parts[3] : "";
+            return setLimiterThreshold(
+                    controller,
+                    new DspChannel[]{output},
+                    parseLimiterDb(value, "limiter " + output.displayName().toLowerCase(Locale.ROOT)
+                            + " set <dB>")
+            );
+        }
+        if (isNumber(parts[2])) {
+            return setLimiterThreshold(
+                    controller,
+                    new DspChannel[]{output},
+                    parseLimiterDb(parts[2], "limiter "
+                            + output.displayName().toLowerCase(Locale.ROOT) + " <dB>")
+            );
+        }
+        return limiterUsage();
     }
 
     static String normalizeRoomCommand(String body) {
@@ -241,14 +319,55 @@ public final class VolumeRoomHandler {
                             boolean muted) throws Exception {
         for (DspChannel channel : channels) {
             if (muted) {
-                controller.mute(channel);
+                runtime.mute(channel.displayName());
             } else {
-                controller.unmute(channel);
+                runtime.unmute(channel.displayName());
             }
-            sleepSilently(120);
         }
-        refreshAfterWrite(controller);
         return "✅ " + targetLabel(channels) + (muted ? " stumm" : " aktiv");
+    }
+
+    private String changeLimiterBy(DspController controller,
+                                   DspChannel[] outputs,
+                                   double deltaDb) throws Exception {
+        ensureKnownLimiters(controller, outputs);
+        double[] targets = new double[outputs.length];
+        for (int index = 0; index < outputs.length; index++) {
+            targets[index] = checkedLimiterDb(
+                    controller.state().limiter(outputs[index]).thresholdDb() + deltaDb
+            );
+        }
+        for (int index = 0; index < outputs.length; index++) {
+            writeLimiterThreshold(controller, outputs[index], targets[index]);
+        }
+        String label = outputs.length == 1 ? outputs[0].displayName() : "alle";
+        return "✅ LIMITER " + label + " " + formatSignedDb(deltaDb) + " dB"
+                + System.lineSeparator() + formatLimiterStatus(controller, outputs);
+    }
+
+    private String setLimiterThreshold(DspController controller,
+                                       DspChannel[] outputs,
+                                       double thresholdDb) throws Exception {
+        ensureKnownLimiters(controller, outputs);
+        double checkedThresholdDb = checkedLimiterDb(thresholdDb);
+        for (DspChannel output : outputs) {
+            writeLimiterThreshold(controller, output, checkedThresholdDb);
+        }
+        String label = outputs.length == 1 ? outputs[0].displayName() : "alle";
+        return "✅ LIMITER " + label + " = " + formatDb(checkedThresholdDb) + " dB"
+                + System.lineSeparator() + formatLimiterStatus(controller, outputs);
+    }
+
+    private void writeLimiterThreshold(DspController controller,
+                                       DspChannel output,
+                                       double thresholdDb) throws Exception {
+        LimiterState limiter = controller.state().limiter(output);
+        runtime.setLimiter(
+                output.displayName(),
+                thresholdDb,
+                limiter.attackMs(),
+                limiter.releaseMs()
+        );
     }
 
     private void ensureConnected() {
@@ -276,9 +395,31 @@ public final class VolumeRoomHandler {
         }
     }
 
-    private void refreshAfterWrite(DspController controller) throws Exception {
-        sleepSilently(200);
-        controller.scanParameterBlocks();
+    private void ensureKnownLimiters(DspController controller, DspChannel[] outputs) throws Exception {
+        Set<Integer> missingBlocks = new LinkedHashSet<>();
+        for (DspChannel output : outputs) {
+            if (!hasCompleteLimiter(controller.state().limiter(output))) {
+                missingBlocks.add(Fir408WriteVerifier.limiterLocation(output).blockIndex());
+            }
+        }
+        for (int blockIndex : missingBlocks) {
+            runtime.readBlock(String.format(Locale.ROOT, "%02X", blockIndex));
+        }
+        for (DspChannel output : outputs) {
+            if (!hasCompleteLimiter(controller.state().limiter(output))) {
+                throw new IllegalStateException(
+                        "Limiterwerte für " + output.displayName() + " fehlen im Server-Cache."
+                );
+            }
+        }
+    }
+
+    private static boolean hasCompleteLimiter(LimiterState limiter) {
+        return limiter != null
+                && limiter.thresholdDb() != null
+                && limiter.attackMs() != null
+                && limiter.releaseMs() != null
+                && limiter.kneeDb() != null;
     }
 
     private String formatStatus(DspController controller, DspChannel[] channels) {
@@ -306,6 +447,24 @@ public final class VolumeRoomHandler {
         return result.toString();
     }
 
+    private String formatLimiterStatus(DspController controller, DspChannel[] outputs) {
+        if (outputs.length == 1) {
+            LimiterState limiter = controller.state().limiter(outputs[0]);
+            return "LIMITER " + outputs[0].displayName() + ": "
+                    + compactLimiterThreshold(limiter.thresholdDb());
+        }
+        StringBuilder result = new StringBuilder("LIMITER: ");
+        for (DspChannel output : outputs) {
+            if (result.length() > "LIMITER: ".length()) {
+                result.append(" | ");
+            }
+            result.append(shortChannelName(output))
+                    .append(' ')
+                    .append(compactLimiterThreshold(controller.state().limiter(output).thresholdDb()));
+        }
+        return result.toString();
+    }
+
     static String compactGain(Double gainDb) {
         return gainDb == null ? "? dB" : formatDb(gainDb) + " dB";
     }
@@ -316,6 +475,10 @@ public final class VolumeRoomHandler {
 
     static String compactMute(Boolean muted) {
         return Boolean.TRUE.equals(muted) ? " 🔇" : "";
+    }
+
+    static String compactLimiterThreshold(Double thresholdDb) {
+        return thresholdDb == null ? "? dB" : formatDb(thresholdDb) + " dB";
     }
 
     private static String compactMute(ChannelState state) {
@@ -337,9 +500,25 @@ public final class VolumeRoomHandler {
     private static boolean isLegacyCommand(String command) {
         return switch (command) {
             case "help", "hilfe", "?", "status", "refresh", "aktualisieren",
-                    "up", "down", "lauter", "leiser", "mute", "unmute", "set", "step" -> true;
+                    "up", "down", "lauter", "leiser", "mute", "unmute", "set", "step",
+                    "limiter", "limit", "lim" -> true;
             default -> false;
         };
+    }
+
+    private static boolean isLimiterCommand(String command) {
+        return command.equals("limiter") || command.equals("limit") || command.equals("lim");
+    }
+
+    static DspChannel limiterOutput(String value) {
+        String normalized = normalizeWord(value);
+        if (normalized.matches("[1-8]")) {
+            normalized = "out" + normalized;
+        }
+        if (!normalized.matches("out[1-8]")) {
+            throw new IllegalArgumentException("Unbekannter Limiter-Ausgang: " + value);
+        }
+        return DspChannel.parse(normalized);
     }
 
     private static boolean isTargetToken(String value) {
@@ -371,11 +550,40 @@ public final class VolumeRoomHandler {
         return value != null && value.trim().replace(',', '.').matches("[+-]?\\d+(\\.\\d+)?");
     }
 
+    private static boolean isSignedNumber(String value) {
+        String normalized = value == null ? "" : value.trim();
+        return (normalized.startsWith("+") || normalized.startsWith("-"))
+                && normalized.length() > 1
+                && isNumber(normalized);
+    }
+
     private static double parseDb(String value, String usage) {
         if (!isNumber(value)) {
             throw new IllegalArgumentException("Benutzung: " + usage);
         }
         return Double.parseDouble(value.trim().replace(',', '.'));
+    }
+
+    private static double parseLimiterDb(String value, String usage) {
+        return checkedLimiterDb(parseDb(value, usage));
+    }
+
+    private static double parseLimiterDbDelta(String value, String usage) {
+        double deltaDb = parseDb(value, usage);
+        if (!Double.isFinite(deltaDb) || deltaDb == 0.0) {
+            throw new IllegalArgumentException("Limiter-Schritt muss ungleich 0 dB sein.");
+        }
+        return deltaDb;
+    }
+
+    static double checkedLimiterDb(double value) {
+        if (!Double.isFinite(value) || value < MIN_LIMITER_DB || value > MAX_LIMITER_DB) {
+            throw new IllegalArgumentException(
+                    "Limiter-Threshold muss zwischen " + formatDb(MIN_LIMITER_DB)
+                            + " und +" + formatDb(MAX_LIMITER_DB) + " dB liegen."
+            );
+        }
+        return value;
     }
 
     private static String formatSignedDb(double value) {
@@ -399,7 +607,11 @@ public final class VolumeRoomHandler {
     }
 
     private static String shortUsage() {
-        return "Pegelraum: in + | out - | ina -20 | out1 -10 | status | help";
+        return "Pegelraum: in + | out - | ina -20 | limiter + | limiter out1 -10 | status | help";
+    }
+
+    private static String limiterUsage() {
+        return "Limiter: limiter <+|-|+1|-1|status|set <dB>|out1..out8 <dB|+|->>";
     }
 
     private String help() {
@@ -431,6 +643,16 @@ public final class VolumeRoomHandler {
                   in set -20
                   out set -20
 
+                Limiter-Thresholds:
+                  limiter status     alle Limiter anzeigen
+                  limiter +          alle Limiter +1 dB
+                  limiter -          alle Limiter -1 dB
+                  limiter +1         alle Limiter relativ +1 dB
+                  limiter -1         alle Limiter relativ -1 dB
+                  limiter set -10    alle Limiter auf -10 dB
+                  limiter out3 -8    Limiter Out3 auf -8 dB
+                  limiter out3 +     Limiter Out3 +1 dB
+
                 Sonstiges:
                   status            alle Kanäle anzeigen
                   help              diese Hilfe
@@ -439,11 +661,4 @@ public final class VolumeRoomHandler {
                 """.formatted(step, step, step, step, step, step, step, step).trim();
     }
 
-    private static void sleepSilently(long ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
 }

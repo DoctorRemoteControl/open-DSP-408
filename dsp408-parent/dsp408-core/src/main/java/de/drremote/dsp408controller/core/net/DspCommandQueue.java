@@ -29,6 +29,7 @@ final class DspCommandQueue {
         private final long sequence;
         private final String coalesceKey;
         private final boolean reliableWrite;
+        private boolean transmissionStarted;
         private final CompletableFuture<Boolean> completion = new CompletableFuture<>();
 
         private Command(byte[] payload,
@@ -98,6 +99,7 @@ final class DspCommandQueue {
     private long writeRetries;
     private long unacknowledgedWrites;
     private Priority activePriority;
+    private Command activeCommand;
     private long lastTransmitEpochMs;
 
     synchronized void open() {
@@ -123,7 +125,7 @@ final class DspCommandQueue {
                                                     Priority priority,
                                                     String coalesceKey,
                                                     boolean reliableWrite) {
-        if (!open) {
+        if (!open || Thread.currentThread().isInterrupted()) {
             return CompletableFuture.failedFuture(new IOException("DSP command queue is closed"));
         }
 
@@ -166,10 +168,19 @@ final class DspCommandQueue {
             pendingByKey.remove(command.coalesceKey, command);
         }
         activePriority = command.priority;
+        activeCommand = command;
         return command;
     }
 
+    synchronized boolean beginTransmission(Command command) {
+        if (activeCommand != command || command.completion.isDone()) return false;
+        command.transmissionStarted = true;
+        return true;
+    }
+
     synchronized void complete(Command command, boolean transmitted) {
+        if (activeCommand != command) return;
+        activeCommand = null;
         activePriority = null;
         if (transmitted) {
             transmittedCommands++;
@@ -187,9 +198,45 @@ final class DspCommandQueue {
     }
 
     synchronized void fail(Command command, Throwable failure) {
+        if (activeCommand != command) return;
+        activeCommand = null;
         activePriority = null;
         command.completion.completeExceptionally(failure);
         notifyAll();
+    }
+
+    synchronized boolean cancel(CompletableFuture<Boolean> completion, Throwable failure) {
+        if (activeCommand != null && activeCommand.completion == completion
+                && !activeCommand.transmissionStarted) {
+            completion.completeExceptionally(new IOException("DSP command cancelled before transmission", failure));
+            return true;
+        }
+        for (Command command : pending) {
+            if (command.completion == completion) {
+                pending.remove(command);
+                if (command.coalesceKey != null) pendingByKey.remove(command.coalesceKey, command);
+                completion.completeExceptionally(new IOException("DSP command cancelled before transmission", failure));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    synchronized void cancelPendingMeters() {
+        if (activeCommand != null && activeCommand.priority == Priority.METER
+                && !activeCommand.transmissionStarted) {
+            activeCommand.completion.complete(false);
+        }
+        var iterator = pending.iterator();
+        while (iterator.hasNext()) {
+            Command command = iterator.next();
+            if (command.priority == Priority.METER) {
+                iterator.remove();
+                pendingByKey.remove(command.coalesceKey, command);
+                coalescedMeterRequests++;
+                command.completion.complete(false);
+            }
+        }
     }
 
     synchronized void recordWriteRetry() {
@@ -222,6 +269,10 @@ final class DspCommandQueue {
         IOException closed = failure instanceof IOException io
                 ? io
                 : new IOException("DSP command queue closed", failure);
+        if (activeCommand != null) {
+            activeCommand.completion.completeExceptionally(closed);
+            activeCommand = null;
+        }
         for (Command command : pending) {
             command.completion.completeExceptionally(closed);
         }

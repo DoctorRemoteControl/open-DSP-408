@@ -41,7 +41,10 @@ class Fir408EvidenceGateTest {
         assertEquals(8, uniqueLimiterChannels(library).size());
         assertTrue(library.outputPeqDefault(1) == null);
 
-        assertFalse(library.muteReadSpec().confirmedFromDevice());
+        assertTrue(library.muteReadSpec().confirmedFromDevice());
+        assertEquals(0x1C, library.muteReadSpec().blockIndex());
+        assertEquals(32, library.muteReadSpec().inputDataOffset());
+        assertEquals(34, library.muteReadSpec().outputDataOffset());
         assertTrue(library.testToneReadSpec() != null);
 
         MeterLayout meters = library.meterLayout();

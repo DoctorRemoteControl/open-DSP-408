@@ -19,7 +19,7 @@ The project is built around an **Apache Karaf / OSGi** runtime and currently inc
 The current codebase is focused on **practical control + reverse engineering support**:
 
 * connect / disconnect / reconnect to the DSP
-* send handshake and keepalive frames
+* send handshake and rate-limited, acknowledged keepalive frames
 * request device/system information
 * send a 4-digit login PIN
 * auto-detect DSP408 vs FIR408 libraries after handshake
@@ -33,6 +33,21 @@ The current codebase is focused on **practical control + reverse engineering sup
 * expose the same functionality via shell, Matrix and HTTP
 
 ---
+
+## Connection stability
+
+Automatic startup runs outside the OSGi activation callback. `isConnected()`
+means handshake and startup completed; the settings cache separately reports
+`SYNCHRONIZING`, `READY`, `DEGRADED`, `STALE` or `DISCONNECTED`. Status reads
+remain available during bootstrap.
+
+Commands use a single response-correlated queue. A missing generic ACK closes
+the session without repeating the write, so a delayed ACK cannot confirm a
+later command. The original write may already have reached the DSP; inspect
+fresh device state before deciding to repeat it.
+
+See [connection lifecycle and validation](docs/CONNECTION-LIFECYCLE.md) for
+cancellation, polling, timeout and coherent-bundle deployment details.
 
 ## Status
 
@@ -366,10 +381,12 @@ de.drremote.dsp408controller
 
 * If `auto.connect=true`, the component tries to connect during activation.
 * If the configured DSP IP or port changes while connected, the component reconnects automatically.
-* `connect()` always uses the current OSGi configuration.
-* Every successful connection performs one verified full parameter dump before settings access is marked ready.
+* `connect()` always uses the current OSGi configuration and is idempotent while a DSP session already exists; only explicit `reconnect()` replaces that session.
+* A new connection performs one full parameter dump. Missing blocks get one later pass (the transport itself retries each read once), then the cache becomes degraded instead of flooding the DSP with repeated reads.
 * The runtime is the only active meter poller. HTTP, Android, ESP and Matrix clients read the shared cache.
 * Normal settings reads are RAM-only. `POST /refresh` explicitly rebuilds the complete cache from the DSP.
+* Normal writes wait for the DSP ACK and then update the RAM/block cache locally. If both repeat-safe attempts lack an ACK, the API reports failure and leaves cached state unchanged. Writes do not trigger a parameter-block readback; reconnect or explicit `POST /refresh` is the authoritative resynchronization point.
+* Meter polling resumes one interval after a control transaction. An unanswered meter request gets a short recovery window before a queued control command, so consecutive app writes are not mixed with stale meter traffic.
 * Old APIs use the default DSP. Multi-DSP APIs use `/api/v1/dsps/{id}/...`.
 
 Example additional DSPs:
@@ -702,6 +719,9 @@ curl -X POST \
 The apply endpoint validates the complete document and then mutes all inputs
 and outputs before writing settings. Channels marked `unmuteAfterApply` remain
 muted unless the request explicitly uses `?unmuteSelected=true`.
+Preset apply refreshes the DSP block cache by default (`?refresh=true`).
+Use `?refresh=false` to skip that dump; decoded write updates then remain
+unconfirmed and raw blocks may still describe the previous device state.
 
 ---
 
@@ -732,6 +752,7 @@ de.drremote.dsp408controller.matrix
 | `control.room.id`      | room for full `!dsp ...` control          |
 | `admin.room.id`        | deprecated fallback for `control.room.id` |
 | `volume.room.id`       | room for simple input/output level control|
+| `volume.room.members.allowed` | allow all senders in the volume room |
 | `warning.room.id`      | read-only room for limiter warnings        |
 | `machine.room.id`      | room for structured machine events        |
 | `allowed.users`        | users allowed in control/volume rooms     |
@@ -753,6 +774,7 @@ config:property-set matrix.url https://matrix.example.org
 config:property-set access.token syt_dummy_token
 config:property-set control.room.id '!controlroom:example.org'
 config:property-set volume.room.id '!volumeroom:example.org'
+config:property-set volume.room.members.allowed false
 config:property-set warning.room.id '!warningroom:example.org'
 config:property-set machine.room.id '!machineroom:example.org'
 config:property-set allowed.users @user1:example.org,@admin:example.org
@@ -821,6 +843,24 @@ Commands must start with:
 The volume room is designed for fast level control without a command prefix.
 Unknown chat messages are ignored. `in` addresses `InA..InD`, `out` addresses
 `Out1..Out8`, and every channel can also be addressed individually.
+By default, senders must be listed in `allowed.users` or `admin.users`. Set
+`volume.room.members.allowed=true` to let every sender who can post in the
+configured volume room use these commands. This does not broaden access to the
+control, warning or machine rooms.
+
+The same room also supports output-limiter threshold control. Attack and
+release remain unchanged. Group steps preserve the relative threshold offsets:
+
+```text
+limiter status
+limiter +
+limiter -
+limiter +1
+limiter -1
+limiter set -10
+limiter out3 -8
+limiter out3 +
+```
 
 ### Supported commands
 

@@ -12,17 +12,28 @@ import de.drremote.dsp408controller.core.state.DspState;
 
 class MuteBlockDecoderTest {
     @Test
-    void fir408PredictedReadbackDoesNotOverwriteTransmittedMuteState() {
+    void observedFir408ReadbackUpdatesInputAndOutputMuteState() {
         DspState state = new DspState();
-        state.markMuted(DspChannel.IN_A, true, "tx");
+        byte[] block = new byte[50];
+        block[32] = 0x08;
+        block[34] = (byte) 0x80;
 
         MuteBlockDecoder decoder = new MuteBlockDecoder(state, null, DspLibraryLoader.loadFir408());
-        decoder.decode(0x1C, new byte[32]);
+        decoder.decode(0x1C, block);
 
-        ChannelState channel = state.channel(DspChannel.IN_A);
-        assertTrue(channel.muted());
-        assertTrue(channel.muteDirty());
-        assertFalse(channel.muteConfirmedFromDevice());
+        ChannelState inA = state.channel(DspChannel.IN_A);
+        ChannelState inD = state.channel(DspChannel.IN_D);
+        ChannelState out1 = state.channel(DspChannel.OUT_1);
+        ChannelState out8 = state.channel(DspChannel.OUT_8);
+
+        assertFalse(inA.muted());
+        assertTrue(inD.muted());
+        assertFalse(out1.muted());
+        assertTrue(out8.muted());
+        assertFalse(inD.muteDirty());
+        assertFalse(out8.muteDirty());
+        assertTrue(inD.muteConfirmedFromDevice());
+        assertTrue(out8.muteConfirmedFromDevice());
     }
 
     @Test

@@ -37,5 +37,15 @@ class DspStateBlockRevisionTest {
         assertEquals(receiveRevision, state.blockRevision(0x0D));
         assertFalse(state.patchCachedBlockUInt16LE(0x0E, 0, 1));
         assertFalse(state.patchCachedBlockUInt16LE(0x0D, 49, 1));
+
+        assertTrue(state.patchCachedBlockBit(0x0D, 20, 0x04, true));
+        assertEquals(0x04, state.getBlock(0x0D)[20] & 0xFF);
+        assertTrue(state.patchCachedBlockBit(0x0D, 20, 0x01, true));
+        assertEquals(0x05, state.getBlock(0x0D)[20] & 0xFF);
+        assertTrue(state.patchCachedBlockBit(0x0D, 20, 0x04, false));
+        assertEquals(0x01, state.getBlock(0x0D)[20] & 0xFF);
+        assertEquals(receiveRevision, state.blockRevision(0x0D));
+        assertFalse(state.patchCachedBlockBit(0x0E, 0, 0x01, true));
+        assertFalse(state.patchCachedBlockBit(0x0D, 50, 0x01, true));
     }
 }

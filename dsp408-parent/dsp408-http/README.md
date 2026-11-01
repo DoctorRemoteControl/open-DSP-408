@@ -202,7 +202,11 @@ curl http://localhost:8181/api/v1/meters
 curl http://localhost:8181/api/v1/channels/out1/meter
 ```
 
-Request a fresh meter frame and return the updated state:
+The legacy meter POST returns the cached state while connected. The central
+server poller owns fresh meter requests, so repeated HTTP calls do not issue
+additional DSP requests. A disconnected DSP returns HTTP `409` with
+`error: "dsp_not_connected"`; cached values remain available through the GET
+endpoints above. This also applies to `/api/v1/dsps/{dspId}/meters/read`.
 
 ```bash
 curl -X POST http://localhost:8181/api/v1/meters/read

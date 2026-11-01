@@ -58,4 +58,17 @@ mvn -pl dsp408-core -am test
 
 Some field-level writes require known existing state because the original DSP protocol writes complete parameter structures. In those cases, run a block scan before modifying a single field.
 
-Still-undecoded functions such as preset storing, network IP, device ID, linking and copy-channel are not implemented here.
+Preset recall, naming and store payloads are implemented. Network IP, device ID, linking and copy-channel remain unsupported.
+
+The command worker serializes complete request/response exchanges. ACK writes
+are sent once; a missing ACK invalidates the session because ACK frames do not
+identify a command. An `IOException` therefore means completion is uncertain,
+not that the device necessarily rejected the value. Required reads use a single one-second response window
+and invalidate the session if it expires. Meter samples are best-effort;
+verified incoming frames determine whether keepalive probes may be suppressed.
+
+Meter polling shutdown removes queued samples. A selected but unsent sample is cancelled too; a sample whose transmission
+has started may finish before the next serialized control command. Checksum-invalid frames
+never reach either state decoders or response matching.
+
+See [connection lifecycle](../docs/CONNECTION-LIFECYCLE.md).

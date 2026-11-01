@@ -270,7 +270,8 @@
         "tx_payload_hex": "00 01 01 12",
         "tx_frame_hex": "10 02 00 01 01 12 10 03 13",
         "interval_ms": 2500,
-        "status": "predicted_from_dsp408"
+        "missing_ack_policy": "Observed startup captures normally return ACK 01 00 01 01, but a missing periodic keepalive ACK is best-effort and must not close an otherwise open TCP session.",
+        "status": "observed_startup_ack_and_live_missing_ack_policy"
       },
       "login": {
         "command": "0x2D",
@@ -381,6 +382,154 @@
           "frames": 189
         }
       ],
+      "communication_timing": {
+        "purpose": "Transport and request/response rules. This section does not describe DSP parameter decoding.",
+        "evidence": {
+          "source_glob": "proxy_logs/proxy_session_*.json",
+          "analysis_date": "2026-08-06",
+          "sessions_found": 54,
+          "sessions_used": 53,
+          "excluded_incomplete_session": "proxy_session_20260507_123845_560.json",
+          "pc_to_dsp_requests": 78814,
+          "immediately_following_dsp_frames": 69233,
+          "correlated_immediate_replies": 69212,
+          "note": "The uncorrelated immediate frames are almost exclusively a 0x40 runtime-meter frame interleaved with a 0x27/0x24 block transaction."
+        },
+        "correlation_contract": {
+          "rule": "A state-changing command or a read command is complete only when its own correlated DSP frame has been received. Do not accept an arbitrary incoming frame as its acknowledgement.",
+          "request_response_pairs": {
+            "0x10": "response command 0x10",
+            "0x13": "response command 0x13",
+            "0x2C": "response command 0x2C",
+            "0x22": "response command 0x22 when the editor-specific startup extension is used",
+            "0x14": "response command 0x14 when the editor-specific startup extension is used",
+            "0x29": "response command 0x29 with the same preset selector",
+            "0x56": "response command 0x56",
+            "0x27": "response command 0x24 with the same block selector",
+            "0x40": "response command 0x40; this response is best-effort meter data, not a control acknowledgement",
+            "write_commands": "exact ACK payload 01 00 01 01"
+          },
+          "negative_ack_payload_hex": "01 00 01 02",
+          "late_or_unrelated_frame_handling": "Keep the frame available for its own decoder/state update, but do not complete the currently awaited transaction with it."
+        },
+        "cold_tcp_session_ready": {
+          "unsolicited_dsp_frames": [
+            "0xB8 carrying the DSP IPv4 address",
+            "0xBE session-ready marker"
+          ],
+          "observed_order": "On a fresh FIR408 TCP connection, 0xB8 and then 0xBE arrive before the editor handshake. On a warm reconnect the FIR408 may omit both frames; multiple successful original-editor sessions then begin directly with 0x10. Wait up to 500 ms for 0xBE, but continue with 0x10 when it is absent. A nearby 0x40 in editor captures is lossy UI meter traffic, not part of the reliable startup transaction.",
+          "evidence": [
+            "proxy_logs/proxy_session_20260805_142720_111.json frames 1-4",
+            "live FIR408 server connection 2026-08-06"
+          ]
+        },
+        "observed_startup_variants": {
+          "minimal_control_path": {
+            "observed_sessions": 10,
+            "request_order": [
+              "0x10",
+              "0x13",
+              "0x2C",
+              "0x27 block reads"
+            ],
+            "interpretation": "Observed in captures whose DSP/TCP cold-start state was not guaranteed. Live cold-start failures on 2026-08-06 showed that this shortened path is not reliable as the initial control-server startup sequence."
+          },
+          "full_editor_ui_path": {
+            "observed_sessions": 5,
+            "request_order": [
+              "0x10",
+              "0x13",
+              "0x2C",
+              "0x22",
+              "0x14",
+              "0x29 preset names 00-12",
+              "0x56 FIR display reads",
+              "0x27 block reads"
+            ],
+            "interpretation": "Use this as the FIR408 cold-start compatibility sequence before the first 0x27 block read. It matches the original editor startup capture from 2026-08-05."
+          }
+        },
+        "measured_reply_latency_ms": {
+          "normal_read_or_write": {
+            "examples": [
+              "0x27->0x24 block read: p50 56, p95 63, p99 68, max 74",
+              "0x35->ACK mute: p50 58, p95 64, max 66",
+              "0x34->ACK gain: p50 63, p95 69, max 73",
+              "0x41->ACK matrix gain: p50 62, p95 69, max 78",
+              "0x3F->ACK limiter: p50 94, p95 109, max 119"
+            ],
+            "recommended_timeout_ms": 500
+          },
+          "handshake": {
+            "0x10_reply": {
+              "p50": 97,
+              "p95": 105,
+              "max": 110
+            },
+            "0x13_reply": {
+              "p50": 53,
+              "p95": 58,
+              "max": 60
+            },
+            "0x2C_reply": {
+              "p50": 54,
+              "p95": 63,
+              "max": 69
+            }
+          },
+          "long_running_commands": {
+            "0x4B_fir_generator_write": {
+              "p50": 618,
+              "p95": 1071,
+              "max": 1912,
+              "recommended_timeout_ms": 3000
+            },
+            "0x4E_external_fir_chunk": {
+              "p50": 72,
+              "p95": 82,
+              "max": 414,
+              "recommended_timeout_ms": 1000
+            },
+            "0x20_preset_recall": {
+              "observed_samples": 2,
+              "min": 4174,
+              "max": 4691,
+              "recommended_timeout_ms": 6000
+            }
+          }
+        },
+        "pacing": {
+          "after_correlated_non_meter_reply": {
+            "observed_next_request_ms": "Usually 1-6 ms. Handshake 0x10->0x13 p50 1 ms; 0x2C->next p50 1 ms/p95 4 ms; 0x27 block-read->next p50 1 ms/p95 6 ms.",
+            "rule": "Do not add a generic 150-800 ms quiet period after a correlated reply. Serial response correlation, not a fixed post-reply delay, protects the DSP."
+          },
+          "runtime_meter_0x40": {
+            "normal_reply": "0x40",
+            "reply_latency": {
+              "p50": 56,
+              "p95": 63,
+              "p99": 68,
+              "max_matched": 107
+            },
+            "next_request_after_reply": {
+              "p50": 256,
+              "p95": 263
+            },
+            "observed_lossiness": "8949 adjacent 0x40->0x40 requests had no intervening DSP frame in the captures. The original editor treats meter reads as lossy/best-effort.",
+            "safe_controller_rule": "Use one coalesced meter slot. Never queue meter requests, never wait up to a control timeout for a missing meter reply, and suspend/cancel meter polling while a handshake, read, write, preset operation, or FIR operation is outstanding."
+          }
+        },
+        "safe_controller_algorithm": [
+          "Open one TCP session and wait up to 500 ms for the unsolicited 0xBE session-ready marker. A cold FIR408 session normally emits it, while an observed warm reconnect may omit it. In either case then send 0x10, 0x13, and 0x2C in order. Only 0x10 is a hard session prerequisite; 0x13 and 0x2C are idempotent metadata reads whose missing data may be marked unavailable.",
+          "Before the first FIR408 0x27 block read, complete the observed cold-start preamble in order: 0x22, 0x14, preset-name reads 0x29/00..12, then the twelve observed 0x56 FIR startup-window reads.",
+          "For every non-meter request, take the single transaction lock, transmit exactly one frame, and wait only for its correlation-contract response.",
+          "After a matching response, release the lock immediately; do not inject a fixed quiet delay.",
+          "If an idempotent read (0x13, 0x14, 0x22, 0x27, 0x29, 0x2C, or 0x56) times out, repeat that exact read once on the same serialized session. A late response is isolated by command/selector correlation. If the retry also times out, mark that read missing and keep the session open so only the missing state must be revisited. For explicitly repeat-safe absolute writes such as mute, gain, and limiter, wait briefly and repeat the identical value once; if both ACKs are absent, keep the session open, report the write as failed, and do not update cached state. Do not inject an automatic parameter-block readback. Non-repeat-safe writes remain strict.",
+          "Run 0x40 as a coalesced best-effort meter task at about 250 ms only when no transaction lock is held. A missing meter frame must not create a backlog or block a control request.",
+          "Do not run a 0x40 request concurrently with a 0x27 block read: the captures contain 0x27->0x40 and 0x40->0x24 collisions that make naive first-frame response matching unsafe."
+        ],
+        "status": "observed_proxy_timing_and_recommended_safe_transport_policy"
+      },
       "status": "observed"
     },
     "block_dump": {
@@ -1444,11 +1593,11 @@
         "status": "observed_fir408_gain_page_gui_captures"
       },
       "read": {
-        "status": "predicted_from_dsp408",
+        "status": "observed_live_fir408_2026_08_06",
         "outputs": {
           "storage": "block_dump",
           "block_hex": "1C",
-          "offset_dec": 15,
+          "offset_dec": 39,
           "encoding": "bitmask",
           "examples": {
             "Out1": "0x01",
@@ -1456,13 +1605,16 @@
             "Out3": "0x04",
             "Out4": "0x08",
             "Out1_plus_Out2": "0x03",
-            "Out2_plus_Out3": "0x06"
-          }
+            "Out2_plus_Out3": "0x06",
+            "Out8_live_unmuted": "0x08",
+            "Out8_live_muted": "0x88"
+          },
+          "note": "2026-08-06 live FIR408 readback confirmed payload offset 39 (block data offset 34); Out8 toggled bit 0x80 and was restored."
         },
         "inputs": {
           "storage": "block_dump",
           "block_hex": "1C",
-          "offset_dec": 13,
+          "offset_dec": 37,
           "encoding": "bitmask",
           "bit_mapping": {
             "InA": "0x01",
@@ -1491,9 +1643,9 @@
             },
             {
               "channel": "InD",
-              "before_raw": 7,
-              "after_raw": 15,
-              "note": "confirmed by scripted write 00 01 03 35 03 00 vs 00 01 03 35 03 01; bit 0x08 toggles for InD"
+              "before_raw": 6,
+              "after_raw": 14,
+              "note": "2026-08-06 live FIR408 readback confirmed payload offset 37 (block data offset 32); bit 0x08 toggles for InD and was restored"
             }
           ],
           "status": "predicted_from_dsp408"

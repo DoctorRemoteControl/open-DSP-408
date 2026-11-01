@@ -2,10 +2,41 @@ package de.drremote.dsp408controller.core.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 class DspCommandQueueTest {
+    @Test
+    void startedMeterRemainsInFlightWhenPollingStops() throws Exception {
+        DspCommandQueue queue = new DspCommandQueue();
+        queue.open();
+        var completion = queue.submit(new byte[]{0, 1, 1, 0x40},
+                DspCommandQueue.Priority.METER, "meter", false);
+        var selected = queue.take();
+        assertTrue(queue.beginTransmission(selected));
+        queue.cancelPendingMeters();
+        assertFalse(completion.isDone());
+        queue.complete(selected, true);
+        assertTrue(completion.get());
+        assertEquals(1L, queue.stats().meterTransmissions());
+    }
+
+    @Test
+    void meterSelectedButNotStartedIsCancelledWhenPollingStops() throws Exception {
+        DspCommandQueue queue = new DspCommandQueue();
+        queue.open();
+        var completion = queue.submit(new byte[]{0, 1, 1, 0x40},
+                DspCommandQueue.Priority.METER, "meter", false);
+        var selected = queue.take();
+        queue.cancelPendingMeters();
+        assertTrue(completion.isDone(), "Selection alone must not make an unsent sample uncancellable");
+        assertFalse(completion.get());
+        assertFalse(queue.beginTransmission(selected));
+        queue.complete(selected, false);
+        assertEquals(0L, queue.stats().meterTransmissions());
+    }
+
     @Test
     void safetyCommandsOvertakePendingMeters() throws Exception {
         DspCommandQueue queue = new DspCommandQueue();

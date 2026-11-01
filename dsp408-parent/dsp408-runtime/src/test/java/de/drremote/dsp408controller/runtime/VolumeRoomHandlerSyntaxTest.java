@@ -3,6 +3,7 @@ package de.drremote.dsp408controller.runtime;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
@@ -18,6 +19,13 @@ class VolumeRoomHandlerSyntaxTest {
         assertEquals("lauter", VolumeRoomHandler.normalizeRoomCommand("lauter"));
         assertEquals("leiser", VolumeRoomHandler.normalizeRoomCommand("leiser"));
         assertEquals("help", VolumeRoomHandler.normalizeRoomCommand("help"));
+        assertEquals("limiter +", VolumeRoomHandler.normalizeRoomCommand("limiter +"));
+        assertEquals("limiter +1", VolumeRoomHandler.normalizeRoomCommand("limiter +1"));
+        assertEquals("limiter -1", VolumeRoomHandler.normalizeRoomCommand("limiter -1"));
+        assertEquals(
+                "limiter out3 -8",
+                VolumeRoomHandler.normalizeRoomCommand("!dsp volume limiter out3 -8")
+        );
     }
 
     @Test
@@ -51,5 +59,18 @@ class VolumeRoomHandlerSyntaxTest {
         assertEquals(" 🔇", VolumeRoomHandler.compactMute(true));
         assertEquals("", VolumeRoomHandler.compactMute(false));
         assertEquals("", VolumeRoomHandler.compactMute(null));
+        assertEquals("-10 dB", VolumeRoomHandler.compactLimiterThreshold(-10.0));
+    }
+
+    @Test
+    void resolvesAndValidatesLimiterTargets() {
+        assertEquals(DspChannel.OUT_1, VolumeRoomHandler.limiterOutput("1"));
+        assertEquals(DspChannel.OUT_8, VolumeRoomHandler.limiterOutput("out8"));
+        assertThrows(IllegalArgumentException.class, () -> VolumeRoomHandler.limiterOutput("ina"));
+
+        assertEquals(-90.0, VolumeRoomHandler.checkedLimiterDb(-90.0));
+        assertEquals(20.0, VolumeRoomHandler.checkedLimiterDb(20.0));
+        assertThrows(IllegalArgumentException.class, () -> VolumeRoomHandler.checkedLimiterDb(-90.1));
+        assertThrows(IllegalArgumentException.class, () -> VolumeRoomHandler.checkedLimiterDb(20.1));
     }
 }

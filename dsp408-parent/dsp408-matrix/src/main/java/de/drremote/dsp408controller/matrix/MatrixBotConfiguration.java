@@ -27,6 +27,12 @@ public @interface MatrixBotConfiguration {
     @AttributeDefinition(name = "Volume Room ID")
     String volume_room_id() default "";
 
+    @AttributeDefinition(
+            name = "Allow Volume Room Members",
+            description = "Allow every sender who can post in the configured volume room"
+    )
+    boolean volume_room_members_allowed() default false;
+
     @AttributeDefinition(name = "Limiter Warning Room ID")
     String warning_room_id() default "";
 

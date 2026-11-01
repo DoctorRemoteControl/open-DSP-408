@@ -1,15 +1,33 @@
 package de.drremote.dsp408controller.http;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.io.InputStream;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 class OpenApiMeterContractTest {
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/v1/meters/read", "/api/v1/dsps/{dspId}/meters/read"})
+    void documentsDisconnectedMeterPollingAsConflict(String path) throws Exception {
+        try (InputStream in = getClass().getResourceAsStream("/openapi/dsp408-openapi.json")) {
+            assertNotNull(in);
+            JsonNode root = new ObjectMapper().readTree(in);
+            JsonNode conflict = root.path("paths").path(path).path("post").path("responses").path("409");
+
+            assertEquals("dsp_not_connected", conflict.path("content").path("application/json")
+                    .path("example").path("error").asText());
+            assertEquals(409, conflict.path("content").path("application/json")
+                    .path("example").path("status").asInt());
+        }
+    }
 
     @Test
     void documentsRuntimeMeterEndpointsAndDtos() throws Exception {

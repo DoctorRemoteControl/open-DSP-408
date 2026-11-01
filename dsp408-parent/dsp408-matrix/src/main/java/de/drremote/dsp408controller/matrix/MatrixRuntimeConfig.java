@@ -11,6 +11,7 @@ public final class MatrixRuntimeConfig {
     public final String accessToken;
     public final String controlRoomId;
     public final String volumeRoomId;
+    public final boolean volumeRoomMembersAllowed;
     public final String warningRoomId;
     public final String machineRoomId;
     public final Set<String> allowedUsers;
@@ -29,6 +30,7 @@ public final class MatrixRuntimeConfig {
             String accessToken,
             String controlRoomId,
             String volumeRoomId,
+            boolean volumeRoomMembersAllowed,
             String warningRoomId,
             String machineRoomId,
             Set<String> allowedUsers,
@@ -46,6 +48,7 @@ public final class MatrixRuntimeConfig {
         this.accessToken = blankToEmpty(accessToken);
         this.controlRoomId = blankToEmpty(controlRoomId);
         this.volumeRoomId = blankToEmpty(volumeRoomId);
+        this.volumeRoomMembersAllowed = volumeRoomMembersAllowed;
         this.warningRoomId = blankToEmpty(warningRoomId);
         this.machineRoomId = blankToEmpty(machineRoomId);
         this.allowedUsers = allowedUsers;
@@ -70,6 +73,7 @@ public final class MatrixRuntimeConfig {
                 cfg.access_token(),
                 controlRoomId,
                 cfg.volume_room_id(),
+                cfg.volume_room_members_allowed(),
                 cfg.warning_room_id(),
                 cfg.machine_room_id(),
                 normalize(cfg.allowed_users()),

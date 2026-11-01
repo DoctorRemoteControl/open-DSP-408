@@ -27,10 +27,9 @@ public final class MatrixBotComponent {
     @Reference
     private DspService service;
 
-    private final AtomicBoolean running = new AtomicBoolean(false);
-
     private volatile MatrixRuntimeConfig config;
     private volatile LimiterWarningMonitor warningMonitor;
+    private volatile AtomicBoolean runToken = new AtomicBoolean(false);
     private ExecutorService dspExecutor;
     private Thread syncThread;
 
@@ -79,17 +78,18 @@ public final class MatrixBotComponent {
             return t;
         });
 
-        running.set(true);
+        AtomicBoolean token = new AtomicBoolean(true);
+        runToken = token;
 
-        syncThread = new Thread(() -> runLoop(cfg), "dsp408-matrix-sync");
+        syncThread = new Thread(() -> runLoop(cfg, token), "dsp408-matrix-sync");
         syncThread.setDaemon(true);
         syncThread.start();
 
         LOG.info("Matrix bot start requested");
     }
 
-    private void runLoop(MatrixRuntimeConfig cfg) {
-        while (running.get()) {
+    private void runLoop(MatrixRuntimeConfig cfg, AtomicBoolean token) {
+        while (token.get()) {
             try {
                 MatrixApiClient api = new MatrixApiClient(cfg.matrixUrl, cfg.accessToken);
 
@@ -97,6 +97,9 @@ public final class MatrixBotComponent {
                 LOG.info("Matrix bot user: {}", botUserId);
 
                 String since = api.sync(null, 0).path("next_batch").asText();
+                if (!token.get()) {
+                    break;
+                }
 
                 LimiterWarningMonitor monitor = null;
                 if (cfg.warningRoomId != null && !cfg.warningRoomId.isBlank()) {
@@ -134,7 +137,7 @@ public final class MatrixBotComponent {
                     LOG.info("Matrix bot machine room: {}", cfg.machineRoomId);
                 }
 
-                while (running.get()) {
+                while (token.get()) {
                     try {
                         var sync = api.sync(since, cfg.syncTimeoutMs);
                         since = sync.path("next_batch").asText();
@@ -150,7 +153,7 @@ public final class MatrixBotComponent {
                         messageHandler.handleRoomEvents(joinedRooms, cfg.machineRoomId, "machine");
 
                     } catch (Exception e) {
-                        if (!running.get()) {
+                        if (!token.get()) {
                             break;
                         }
 
@@ -166,13 +169,13 @@ public final class MatrixBotComponent {
                 }
 
             } catch (Exception e) {
+                if (!token.get()) {
+                    break;
+                }
                 LimiterWarningMonitor monitor = warningMonitor;
                 if (monitor != null) {
                     monitor.stop();
                     warningMonitor = null;
-                }
-                if (!running.get()) {
-                    break;
                 }
                 LOG.error("Matrix bot start/login failed", e);
                 try {
@@ -188,7 +191,7 @@ public final class MatrixBotComponent {
     }
 
     private synchronized void stop() {
-        running.set(false);
+        runToken.set(false);
 
         LimiterWarningMonitor monitor = warningMonitor;
         if (monitor != null) {

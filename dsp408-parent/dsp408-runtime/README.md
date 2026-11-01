@@ -15,7 +15,10 @@ This bundle wires `dsp408-api` to `dsp408-core`. It owns the default `DspControl
 
 ## Main Classes
 
-- `DspRuntimeComponent` - OSGi component implementing `DspService` and the named DSP pool.
+- `DspRuntimeComponent` - OSGi service facade and named DSP pool.
+- `DspConnectionManager` - single lifecycle worker, coalesced connects, cancellation and reconnect scheduling.
+- `DspSettingsCache` - independent settings synchronization and cancellation-safe cache status.
+- `DspTransactionCoordinator` - coordinates foreground work with central meter polling.
 - `Dsp408Configuration` - metatype configuration for default DSP IP/port, additional DSPs and startup behavior.
 - `VolumeRoomHandler` - grouped InA-InD volume helper used by HTTP, shell and Matrix.
 
@@ -29,7 +32,7 @@ This bundle wires `dsp408-api` to `dsp408-core`. It owns the default `DspControl
 - `dsp.ip` - default DSP IPv4 address, default `192.168.0.166`.
 - `dsp.port` - default DSP TCP port, default `9761`.
 - `dsp.library` - protocol library selected before the startup dump: `fir408`, `dsp408` or `auto`.
-- `auto.connect` - connect configured DSPs during component activation.
+- `auto.connect` - schedule configured DSP connections after activation; activation does not wait for a device.
 - `auto.read.on.connect` - compatibility flag; every connection performs a verified full parameter dump.
 - `volume.step.db` - default grouped volume step size.
 - `dsps` - optional additional DSPs as `id=ip` or `id=ip:port`.
@@ -67,6 +70,19 @@ From `dsp408-parent`:
 ```bash
 mvn -pl dsp408-runtime -am test
 ```
+
+## Connection status
+
+Automatic connect and configuration-driven reconnect run on the device lifecycle
+worker. Explicit `connect()` waits for the shared attempt, while repeated calls
+leave a ready session intact. `disconnect()` cancels current bootstrap work.
+Status reads do not wait for network I/O or a complete parameter dump.
+
+`isConnected()` reports completed protocol bootstrap. Check
+`getSettingsCacheStatus().ready()` separately when a complete settings snapshot
+is required. Disconnected cached values remain available as historical state.
+See [connection lifecycle](../docs/CONNECTION-LIFECYCLE.md) for completion and
+readback semantics.
 
 ## Notes
 

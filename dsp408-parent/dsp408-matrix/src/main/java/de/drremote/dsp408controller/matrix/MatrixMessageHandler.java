@@ -110,7 +110,10 @@ public final class MatrixMessageHandler {
             }
 
             if ("volume".equals(mode)) {
-                if (!config.isUserAllowed(sender)) {
+                if (!allowsVolumeCommand(
+                        config.volumeRoomMembersAllowed,
+                        config.isUserAllowed(sender)
+                )) {
                     continue;
                 }
 
@@ -146,6 +149,10 @@ public final class MatrixMessageHandler {
                 });
             }
         }
+    }
+
+    static boolean allowsVolumeCommand(boolean roomMembersAllowed, boolean explicitlyAllowed) {
+        return roomMembersAllowed || explicitlyAllowed;
     }
 
     private void handleMachineEvents(JsonNode events, String roomId) {
