@@ -203,36 +203,41 @@ final class DspSocketSession {
     }
 
     private void readLoop(Connection connection) {
+        // Preserve partial frames across socket idle timeouts. The shared
+        // decoder bounds its pending buffer by the protocol's maximum frame.
+        var decoder = new de.drremote.dsp408.protocol.DspFrameDecoder();
+        byte[] chunk = new byte[4096];
         try {
             while (isActive(connection)) {
                 try {
-                    DspFrameCodec.DecodedFrame frame = DspFrameCodec.readFrame(connection.input);
-                    if (frame == null || !isActive(connection)) {
-                        continue;
-                    }
-                    String suffix = frame.checksumValid() ? ""
-                            : " | CHECKSUM ERROR calc=" + Hex.byteToHex(frame.calculatedChecksum())
-                            + " rx=" + Hex.byteToHex(frame.receivedChecksum());
-                    String ack = DspProtocol.isAck(frame.payload()) ? " | ACK" : "";
-                    log("<-- RX payload=" + Hex.format(frame.payload())
-                            + " | ascii=" + Hex.ascii(frame.payload()) + ack + suffix);
-                    if (!frame.checksumValid() || !isActive(connection)) {
-                        continue;
-                    }
-                    notifyPayloadListener(frame.payload());
-                    if (!isActive(connection)) {
-                        continue;
-                    }
-                    if (DspCommandPolicy.commandByte(frame.payload()) == 0xBE) {
-                        connection.readyMarkerReceived = true;
-                        connection.sessionReady.countDown();
-                    }
-                    BiConsumer<Object, byte[]> listener = responseListener;
-                    if (listener != null && isActive(connection)) {
-                        listener.accept(connection, frame.payload());
+                    int count = connection.input.read(chunk);
+                    if (count < 0) throw new EOFException("EOF reading DSP stream");
+                    for (var frame : decoder.accept(Arrays.copyOf(chunk, count))) {
+                        if (!isActive(connection)) break;
+                        String suffix = frame.checksumValid() ? ""
+                                : " | CHECKSUM ERROR calc=" + Hex.byteToHex(frame.calculatedChecksum())
+                                + " rx=" + Hex.byteToHex(frame.receivedChecksum());
+                        String ack = DspProtocol.isAck(frame.payload()) ? " | ACK" : "";
+                        log("<-- RX payload=" + Hex.format(frame.payload())
+                                + " | ascii=" + Hex.ascii(frame.payload()) + ack + suffix);
+                        if (!frame.checksumValid() || !isActive(connection)) {
+                            continue;
+                        }
+                        notifyPayloadListener(frame.payload());
+                        if (!isActive(connection)) {
+                            continue;
+                        }
+                        if (DspCommandPolicy.commandByte(frame.payload()) == 0xBE) {
+                            connection.readyMarkerReceived = true;
+                            connection.sessionReady.countDown();
+                        }
+                        BiConsumer<Object, byte[]> listener = responseListener;
+                        if (listener != null && isActive(connection)) {
+                            listener.accept(connection, frame.payload());
+                        }
                     }
                 } catch (SocketTimeoutException ignored) {
-                    // Idle timeout.
+                    // Retain decoder state while waiting for the rest of a frame.
                 } catch (EOFException error) {
                     if (isActive(connection)) {
                         log("Remote peer closed the connection");

@@ -7,8 +7,10 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 
 final class DspCommandQueue {
+    private static final int PENDING_COMMAND_LIMIT = 64;
     enum Priority {
         SAFETY(0),
         CONTROL(10),
@@ -138,21 +140,49 @@ final class DspCommandQueue {
         );
         submittedCommands++;
 
-        if (coalesceKey != null) {
-            Command previous = pendingByKey.put(coalesceKey, command);
-            if (previous != null && pending.remove(previous)) {
-                supersededCommands++;
-                if (previous.priority == Priority.METER) {
-                    coalescedMeterRequests++;
-                }
-                previous.completion.complete(false);
+        Command previous = coalesceKey == null ? null : pendingByKey.get(coalesceKey);
+        if (previous != null) {
+            removePending(previous);
+            supersededCommands++;
+            if (previous.priority == Priority.METER) {
+                coalescedMeterRequests++;
             }
+            previous.completion.complete(false);
+        } else if (pending.size() >= PENDING_COMMAND_LIMIT) {
+            Command displaced = priority == Priority.SAFETY ? safetyDisplacementCandidate() : null;
+            if (displaced == null) {
+                command.completion.completeExceptionally(new RejectedExecutionException(
+                        "DSP command queue is full (64 pending commands)"));
+                return command.completion;
+            }
+            removePending(displaced);
+            displaced.completion.completeExceptionally(new RejectedExecutionException(
+                    "DSP command displaced by a safety command because the queue is full"));
         }
 
+        if (coalesceKey != null) {
+            pendingByKey.put(coalesceKey, command);
+        }
         pending.add(command);
         maxPendingCommands = Math.max(maxPendingCommands, pending.size());
         notifyAll();
         return command.completion;
+    }
+
+    private Command safetyDisplacementCandidate() {
+        // Preserve higher priorities and older commands within the selected priority.
+        return pending.stream()
+                .filter(command -> command.priority.order > Priority.SAFETY.order)
+                .max(Comparator.comparingInt((Command command) -> command.priority.order)
+                        .thenComparingLong(command -> command.sequence))
+                .orElse(null);
+    }
+
+    private void removePending(Command command) {
+        pending.remove(command);
+        if (command.coalesceKey != null) {
+            pendingByKey.remove(command.coalesceKey, command);
+        }
     }
 
     synchronized Command take() throws InterruptedException {

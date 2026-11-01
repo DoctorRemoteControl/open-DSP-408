@@ -1,6 +1,7 @@
 package de.drremote.dsp408controller.http;
 
 import java.io.IOException;
+import java.util.concurrent.RejectedExecutionException;
 
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
@@ -98,6 +99,8 @@ public final class DspApiServlet extends HttpServlet {
             if (!getRoutes.handle(context.path(), context.dsp(), resp)) {
                 sendError(resp, 404, "not_found", "Unknown endpoint.");
             }
+        } catch (RejectedExecutionException e) {
+            sendError(resp, 503, "dsp_overloaded", e.getMessage());
         } catch (UnsupportedOperationException e) {
             sendError(resp, 409, "unsupported_operation", e.getMessage());
         } catch (IllegalStateException e) {
@@ -143,6 +146,8 @@ public final class DspApiServlet extends HttpServlet {
         } catch (JsonPresetApplier.PresetApplyException e) {
             RequestContext context = requestContext(req);
             writeJson(resp, e.httpStatus(), e.response(context.dsp().dspId()));
+        } catch (RejectedExecutionException e) {
+            sendError(resp, 503, "dsp_overloaded", e.getMessage());
         } catch (UnsupportedOperationException e) {
             sendError(resp, 409, "unsupported_operation", e.getMessage());
         } catch (IllegalStateException e) {

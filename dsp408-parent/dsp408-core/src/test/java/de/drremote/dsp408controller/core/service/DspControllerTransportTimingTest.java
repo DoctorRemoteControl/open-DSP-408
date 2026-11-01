@@ -3,6 +3,7 @@ package de.drremote.dsp408controller.core.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import java.io.OutputStream;
 import java.io.PushbackInputStream;
@@ -11,12 +12,20 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.ArrayList;
+import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.Test;
 
+import de.drremote.dsp408controller.command.DspCommandProcessor;
 import de.drremote.dsp408controller.core.net.DspConnectionConfig;
 import de.drremote.dsp408controller.core.net.DspFrameCodec;
 import de.drremote.dsp408controller.core.protocol.DspChannel;
@@ -24,6 +33,85 @@ import de.drremote.dsp408controller.core.protocol.DspChannel;
 class DspControllerTransportTimingTest {
     private static final Path FIR_LIBRARY =
             Path.of("src", "main", "resources", "dsp", "DspLib-408-fir.json");
+
+    @Test
+    @Timeout(15)
+    void overloadedGainWriteLeavesCachedStateAndSocketIntact() throws Exception {
+        try (ServerSocket server = new ServerSocket(0)) {
+            CountDownLatch activeWritten = new CountDownLatch(1);
+            CountDownLatch releaseActive = new CountDownLatch(1);
+            CountDownLatch checked = new CountDownLatch(1);
+            CompletableFuture<Void> fakeDsp = CompletableFuture.runAsync(() -> {
+                try (Socket socket = server.accept()) {
+                    socket.setSoTimeout(5_000);
+                    PushbackInputStream input = new PushbackInputStream(socket.getInputStream(), 1);
+                    OutputStream output = socket.getOutputStream();
+                    answerFirStartup(input, output);
+                    assertEquals(0x21, command(read(input)));
+                    activeWritten.countDown();
+                    assertTrue(releaseActive.await(5, TimeUnit.SECONDS));
+                    write(output, new byte[]{1, 0, 1, 1});
+                    for (int index = 0; index < 64; index++) {
+                        assertEquals(0x37, command(read(input)), "Rejected gain must never reach the DSP");
+                        write(output, new byte[]{1, 0, 1, 1});
+                    }
+                    assertEquals(0x34, command(read(input)));
+                    write(output, new byte[]{1, 0, 1, 1});
+                    assertTrue(checked.await(2, TimeUnit.SECONDS));
+                } catch (Exception error) {
+                    throw new RuntimeException(error);
+                }
+            });
+            DspController controller = new DspController(FIR_LIBRARY);
+            try (var producers = Executors.newVirtualThreadPerTaskExecutor()) {
+                controller.setPreferredLibraryType("fir408");
+                controller.connect(config(server), ignored -> { });
+                controller.state().markGain(DspChannel.OUT_1, -40.0, "test baseline");
+                Future<?> active = producers.submit(() -> {
+                    controller.sendRaw(new byte[]{0, 1, 2, 0x21, 0});
+                    return null;
+                });
+                assertTrue(activeWritten.await(2, TimeUnit.SECONDS));
+                List<Future<?>> pending = new ArrayList<>();
+                for (int index = 0; index < 64; index++) {
+                    int selector = index;
+                    pending.add(producers.submit(() -> {
+                        controller.sendRaw(new byte[]{0, 1, 2, 0x37, (byte) selector});
+                        return null;
+                    }));
+                }
+                try {
+                    assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+                        while (controller.trafficSnapshot().pendingCommands() < 64) Thread.sleep(1);
+                    });
+                    assertTimeoutPreemptively(Duration.ofMillis(500), () ->
+                            assertThrows(RejectedExecutionException.class,
+                                    () -> controller.setGain(DspChannel.OUT_1, -20.0)));
+                    List<String> commandMessages = new ArrayList<>();
+                    DspCommandProcessor processor = new DspCommandProcessor(controller, () -> config(server),
+                            commandMessages::add, DspCommandProcessor.CommandMode.CLI);
+                    assertThrows(RejectedExecutionException.class, () -> processor.process("gain out1 -20"));
+                    assertTrue(commandMessages.isEmpty(), "Overload must propagate to the HTTP command gateway");
+                    assertEquals(-40.0, controller.state().channel(DspChannel.OUT_1).gainDb());
+                    assertTrue(controller.isConnected());
+                    assertEquals(64, controller.trafficSnapshot().pendingCommands());
+                } finally {
+                    releaseActive.countDown();
+                }
+                active.get(3, TimeUnit.SECONDS);
+                for (Future<?> command : pending) command.get(3, TimeUnit.SECONDS);
+                controller.setGain(DspChannel.OUT_1, -20.0);
+                assertEquals(-20.0, controller.state().channel(DspChannel.OUT_1).gainDb());
+                assertTrue(controller.isConnected());
+                checked.countDown();
+                fakeDsp.get(3, TimeUnit.SECONDS);
+            } finally {
+                releaseActive.countDown();
+                checked.countDown();
+                controller.close();
+            }
+        }
+    }
 
     @Test
     void acknowledgedFirLimiterWriteIsTransmittedExactlyOnce() throws Exception {

@@ -30,3 +30,7 @@ Thumbs.db
 
 # Java
 *.class
+
+# Python integration tooling
+__pycache__/
+*.py[cod]

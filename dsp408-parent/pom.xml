@@ -22,6 +22,11 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>21</maven.compiler.release>
         <dsp408.protocol.version>0.1.0-SNAPSHOT</dsp408.protocol.version>
+        <!-- ci/verify.sh supplies checkout identities; direct Maven builds stay explicit. -->
+        <dsp408.source.revision>unknown</dsp408.source.revision>
+        <dsp408.source.dirty>unknown</dsp408.source.dirty>
+        <dsp408.protocol.revision>unknown</dsp408.protocol.revision>
+        <dsp408.protocol.dirty>unknown</dsp408.protocol.dirty>
 
         <karaf.version>4.4.10</karaf.version>
         <bnd.version>7.0.0</bnd.version>
@@ -111,6 +116,16 @@
                 <plugin>
                     <artifactId>maven-jar-plugin</artifactId>
                     <version>3.4.2</version>
+                    <configuration>
+                        <archive>
+                            <manifestEntries>
+                                <DSP408-Source-Revision>${dsp408.source.revision}</DSP408-Source-Revision>
+                                <DSP408-Source-Dirty>${dsp408.source.dirty}</DSP408-Source-Dirty>
+                                <DSP408-Protocol-Revision>${dsp408.protocol.revision}</DSP408-Protocol-Revision>
+                                <DSP408-Protocol-Dirty>${dsp408.protocol.dirty}</DSP408-Protocol-Dirty>
+                            </manifestEntries>
+                        </archive>
+                    </configuration>
                 </plugin>
 
                 <plugin>

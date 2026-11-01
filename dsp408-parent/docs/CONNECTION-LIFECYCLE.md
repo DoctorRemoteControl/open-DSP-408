@@ -95,3 +95,9 @@ blocked bootstrap, duplicate connects, cache invalidation and actual HTTP route
 behavior. They do not prove firmware timing on every DSP version or identify
 the exact JARs loaded during the historical incidents. Validate a coherent
 installation separately before relying on it for live operation.
+
+The command queue is bounded to64 pending requests plus its active exchange.
+See [overload handling](../../docs/QUEUE-OVERLOAD.md),
+[real Karaf integration](../../docs/KARAF-INTEGRATION.md) and
+[physical read-only validation](../../docs/HARDWARE-VALIDATION.md) for
+repeatable checks and their evidence limits.

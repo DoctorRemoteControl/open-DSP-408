@@ -3,6 +3,9 @@
 
     <feature name="dsp408-runtime" version="${project.version}">
         <feature>scr</feature>
+        <bundle>mvn:com.fasterxml.jackson.core/jackson-annotations/${jackson.version}</bundle>
+        <bundle>mvn:com.fasterxml.jackson.core/jackson-core/${jackson.version}</bundle>
+        <bundle>mvn:com.fasterxml.jackson.core/jackson-databind/${jackson.version}</bundle>
         <bundle>mvn:de.drremote/dsp408-api/${project.version}</bundle>
         <bundle>mvn:de.drremote/dsp408-protocol/${dsp408.protocol.version}</bundle>
         <bundle>mvn:de.drremote/dsp408-core/${project.version}</bundle>
@@ -16,18 +19,12 @@
 
     <feature name="dsp408-matrix" version="${project.version}">
         <feature>dsp408-runtime</feature>
-        <bundle>mvn:com.fasterxml.jackson.core/jackson-annotations/${jackson.version}</bundle>
-        <bundle>mvn:com.fasterxml.jackson.core/jackson-core/${jackson.version}</bundle>
-        <bundle>mvn:com.fasterxml.jackson.core/jackson-databind/${jackson.version}</bundle>
         <bundle>mvn:de.drremote/dsp408-matrix/${project.version}</bundle>
     </feature>
 
     <feature name="dsp408-http" version="${project.version}">
         <feature>http</feature>
         <feature>dsp408-runtime</feature>
-        <bundle>mvn:com.fasterxml.jackson.core/jackson-annotations/${jackson.version}</bundle>
-        <bundle>mvn:com.fasterxml.jackson.core/jackson-core/${jackson.version}</bundle>
-        <bundle>mvn:com.fasterxml.jackson.core/jackson-databind/${jackson.version}</bundle>
         <bundle>mvn:de.drremote/dsp408-http/${project.version}</bundle>
     </feature>
 

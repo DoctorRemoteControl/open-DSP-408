@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -147,6 +148,8 @@ public final class DspCommandProcessor {
 
                 default -> log.accept("Unknown command: " + cmd + ". Type 'help'.");
             }
+        } catch (RejectedExecutionException e) {
+            throw e;
         } catch (UnsupportedDspOperationException e) {
             log.accept("Not enabled: " + e.getMessage());
         } catch (Exception e) {

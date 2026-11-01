@@ -27,6 +27,38 @@ import org.junit.jupiter.api.Test;
 
 class DspSocketSessionTest {
     @Test
+    void fragmentedFrameSurvivesIdleTimeoutBetweenChunks() throws Exception {
+        try (ServerSocket server = new ServerSocket(0)) {
+            CountDownLatch checked = new CountDownLatch(1);
+            CompletableFuture<Void> peer = CompletableFuture.runAsync(() -> {
+                try (Socket socket = server.accept()) {
+                    byte[] frame = DspFrameCodec.encode(new byte[]{1, 0, 4, 0x14, 0x10, 0x03, 0x55});
+                    socket.getOutputStream().write(frame, 0, 6);
+                    socket.getOutputStream().flush();
+                    Thread.sleep(250L); // Longer than the session's 100 ms idle timeout.
+                    socket.getOutputStream().write(frame, 6, frame.length-6);
+                    socket.getOutputStream().flush();
+                    assertTrue(checked.await(2, TimeUnit.SECONDS));
+                } catch (Exception error) { throw new RuntimeException(error); }
+            });
+            DspSocketSession session = session(server);
+            LinkedBlockingQueue<byte[]> responses = new LinkedBlockingQueue<>();
+            session.setResponseListener(responses::add);
+            try {
+                session.open();
+                session.startReader();
+                byte[] reply = responses.poll(1, TimeUnit.SECONDS);
+                assertNotNull(reply, "Idle socket timeouts must not discard an incomplete valid frame");
+                org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[]{1, 0, 4, 0x14, 0x10, 0x03, 0x55}, reply);
+            } finally {
+                checked.countDown();
+                session.finishClose(session.beginClose());
+            }
+            peer.get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void retiredWriterCannotSendToAReplacementSocket() throws Exception {
         try (ServerSocket server = new ServerSocket(0)) {
             CountDownLatch writerPaused = new CountDownLatch(1);

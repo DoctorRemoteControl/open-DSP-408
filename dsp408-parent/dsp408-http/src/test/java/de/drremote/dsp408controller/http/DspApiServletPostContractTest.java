@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
+import java.util.concurrent.RejectedExecutionException;
 
 import javax.servlet.ReadListener;
 import javax.servlet.ServletInputStream;
@@ -36,6 +37,79 @@ import de.drremote.dsp408.api.StateDto;
 
 class DspApiServletPostContractTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    @ParameterizedTest
+    @CsvSource({
+            "/channels/out1/gain, gain",
+            "/dsps/room2/channels/out1/gain, gain",
+            "/delay-unit, unit",
+            "/dsps/room2/delay-unit, unit",
+            "/raw, payloadHex",
+            "/dsps/room2/raw, payloadHex",
+            "/command, line",
+            "/dsps/room2/command, line",
+            "/volume/set, gain",
+            "/dsps/room2/volume/set, gain",
+            "/blocks/00/read, empty",
+            "/dsps/room2/blocks/00/read, empty"
+    })
+    void overloadedCommandPathsReturnStructuredServiceUnavailable(String path, String field) throws Exception {
+        Fixture fixture = new Fixture(path);
+        fixture.target.failure = new RejectedExecutionException("DSP command queue is full (64 pending commands)");
+        String body = switch (field) {
+            case "gain" -> "{\"db\":-20}";
+            case "line" -> "{\"line\":\"gain out1 -20\"}";
+            case "unit" -> "{\"unit\":\"ms\"}";
+            case "payloadHex" -> "{\"payloadHex\":\"00 01 01 12\"}";
+            default -> "";
+        };
+
+        Response response = fixture.post(path, body, Map.of());
+
+        assertOverloaded(response);
+        assertTrue(fixture.target.connected);
+        assertEquals(1, fixture.target.calls.size());
+        if (path.startsWith("/dsps/")) assertTrue(fixture.root.calls.isEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/preset/export", "/dsps/room2/preset/export"})
+    void overloadedGetCommandReturnsStructuredServiceUnavailable(String path) throws Exception {
+        Fixture fixture = new Fixture(path);
+        fixture.target.failure = new RejectedExecutionException("DSP command queue is full (64 pending commands)");
+        Response response = new Response();
+
+        fixture.servlet.doGet(request(path, "", Map.of()), response.proxy);
+
+        assertOverloaded(response);
+        assertTrue(fixture.target.connected);
+        assertEquals(List.of("exportPresetSnapshot"), fixture.target.calls);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/preset/apply", "/dsps/room2/preset/apply"})
+    void presetOverloadRetainsFailureDetailsAndReturnsServiceUnavailable(String path) throws Exception {
+        Fixture fixture = new Fixture(path);
+        fixture.target.failure = new RejectedExecutionException("DSP command queue is full (64 pending commands)");
+
+        Response response = fixture.post(path, minimalPreset(), Map.of());
+
+        assertOverloaded(response);
+        assertTrue(response.json().get("emergencyMuteAttempted").asBoolean());
+        assertEquals(0, response.json().get("completedOperationCount").asInt());
+        assertFalse(response.json().get("allChannelsEmergencyMuted").asBoolean());
+        assertTrue(fixture.target.connected);
+    }
+
+    private static void assertOverloaded(Response response) throws Exception {
+        assertEquals(503, response.status);
+        assertEquals("application/json", response.contentType);
+        assertEquals("UTF-8", response.encoding);
+        assertEquals("dsp_overloaded", response.json().get("error").asText());
+        assertEquals(503, response.json().get("status").asInt());
+        assertFalse(response.json().has("ok"));
+        assertFalse(response.json().get("message").asText().isBlank());
+    }
 
     @ParameterizedTest
     @CsvSource({
@@ -213,7 +287,8 @@ class DspApiServletPostContractTest {
                 }
                 case "requestRuntimeMeters", "setDelayUnit", "scanBlocks", "mute", "unmute",
                      "setChannelName", "setGain", "setPhase", "setDelay", "setFirProcessingMode",
-                     "setMatrixRoutes" -> {
+                     "setMatrixRoutes", "sendRawHex", "readBlock", "exportPresetSnapshot",
+                     "executeShell", "executeMatrix", "executeVolumeRoom" -> {
                     calls.add(method.getName());
                     if (disconnectDuringRequest) {
                         connected = false;

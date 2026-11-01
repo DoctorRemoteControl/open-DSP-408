@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.RejectedExecutionException;
 
 import de.drremote.dsp408.api.DspService;
 
@@ -637,7 +638,11 @@ final class JsonPresetApplier {
         Map<String, Object> response(String dspId) {
             int status = httpStatus();
             Map<String, Object> response = new LinkedHashMap<>();
-            response.put("error", status == 409 ? "unsupported_operation" : "preset_apply_failed");
+            response.put("error", switch (status) {
+                case 409 -> "unsupported_operation";
+                case 503 -> "dsp_overloaded";
+                default -> "preset_apply_failed";
+            });
             response.put("message", getMessage());
             response.put("status", status);
             response.put("dspId", dspId);
@@ -651,6 +656,7 @@ final class JsonPresetApplier {
         }
 
         int httpStatus() {
+            if (getCause() instanceof RejectedExecutionException) return 503;
             return getCause() instanceof UnsupportedOperationException ? 409 : 500;
         }
     }

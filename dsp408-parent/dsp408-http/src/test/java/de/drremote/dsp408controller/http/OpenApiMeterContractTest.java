@@ -15,6 +15,24 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 class OpenApiMeterContractTest {
 
     @ParameterizedTest
+    @ValueSource(strings = {"/api/v1/channels/{channelId}/gain", "/api/v1/dsps/{dspId}/channels/{channelId}/gain",
+            "/api/v1/raw", "/api/v1/blocks/{blockIndex}/read", "/api/v1/preset/apply",
+            "/api/v1/dsps/{dspId}/preset/apply", "/api/v1/preset/export"})
+    void commandEndpointsDocumentStructuredOverload(String path) throws Exception {
+        try (InputStream in = getClass().getResourceAsStream("/openapi/dsp408-openapi.json")) {
+            assertNotNull(in);
+            JsonNode root = new ObjectMapper().readTree(in);
+            String method = path.endsWith("/export") ? "get" : "post";
+            JsonNode overload = root.path("paths").path(path).path(method).path("responses").path("503");
+            assertEquals("#/components/responses/DspOverloadedResponse", overload.path("$ref").asText());
+            JsonNode example = root.path("components").path("responses").path("DspOverloadedResponse")
+                    .path("content").path("application/json").path("example");
+            assertEquals("dsp_overloaded", example.path("error").asText());
+            assertEquals(503, example.path("status").asInt());
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"/api/v1/meters/read", "/api/v1/dsps/{dspId}/meters/read"})
     void documentsDisconnectedMeterPollingAsConflict(String path) throws Exception {
         try (InputStream in = getClass().getResourceAsStream("/openapi/dsp408-openapi.json")) {
