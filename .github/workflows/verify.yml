@@ -13,8 +13,6 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
-    env:
-      MAVEN_OPTS: -Dmaven.repo.local=${{ runner.temp }}/dsp408-m2
     steps:
       - name: Check out Controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,6 +50,8 @@ jobs:
         run: python3 open-DSP-408/ci/test_verify.py
 
       - name: Verify and install bundles
+        env:
+          MAVEN_OPTS: -Dmaven.repo.local=${{ runner.temp }}/dsp408-m2
         run: bash open-DSP-408/ci/verify.sh
 
       - name: Verify integration tooling
