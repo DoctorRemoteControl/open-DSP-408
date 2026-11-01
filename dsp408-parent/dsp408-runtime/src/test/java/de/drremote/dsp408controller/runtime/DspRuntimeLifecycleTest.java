@@ -93,6 +93,8 @@ class DspRuntimeLifecycleTest {
 
     static Dsp408Configuration config(int port, String[] devices) {
         return new Dsp408Configuration() {
+            public String registry_mode() { return "static"; }
+            public String registry_file() { return ""; }
             public String dsp_id() { return "main"; }
             public String dsp_ip() { return "127.0.0.1"; }
             public int dsp_port() { return port; }

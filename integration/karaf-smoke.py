@@ -245,11 +245,12 @@ class Validation:
         self.env = os.environ.copy()
         for key in ("KARAF_HOME", "KARAF_BASE", "KARAF_DATA", "KARAF_ETC", "KARAF_OPTS",
                     "KARAF_DEBUG", "KARAF_USER", "KARAF_PASSWORD", "JAVA_OPTS",
-                    "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"):
+                    "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS",
+                    "DISPLAY", "WAYLAND_DISPLAY"):
             self.env.pop(key, None)
         self.env["KARAF_USER"] = "dsp408-smoke"
         self.env["KARAF_PASSWORD"] = secrets.token_urlsafe(24)
-        self.env["KARAF_OPTS"] = "-Xms128m -Xmx512m"
+        self.env["KARAF_OPTS"] = "-Xms128m -Xmx512m -Djava.awt.headless=true"
 
     def control(self, action, *arguments, check=True, timeout=None):
         command = [sys.executable, str(self.home / "bin/codex-karaf.py"), action,
@@ -283,7 +284,8 @@ class Validation:
         except urllib.error.HTTPError as error:
             response = error
         with response:
-            data = json.loads(response.read())
+            payload = response.read()
+            data = json.loads(payload) if payload else None
             item = {"path": path, "method": method, "status": response.status,
                     "seconds": round(time.monotonic() - started, 3), "body": data,
                     "serverTiming": response.headers.get("Server-Timing")}
@@ -715,6 +717,157 @@ class Validation:
             raise RuntimeError("Owned Karaf process or listener did not stop")
 
 
+class HeadlessValidation(Validation):
+    """Exercise packaged API-only Java with persistent, isolated DSP targets."""
+
+    def provision(self, peers):
+        super().provision(peers)
+        # Remove only this fixture's generated legacy config. The fresh feature
+        # must create its own managed profile and default OSGi data location.
+        (self.home / "etc/de.drremote.dsp408controller.config").unlink()
+
+    def require_service(self):
+        services = self.control("services")["data"]
+        matches = [item for item in services.get("items", [])
+                   if "de.drremote.dsp408.api.DspService" in item.get("interfaces", [])]
+        if len(matches) != 1 or matches[0]["properties"].get("registry.mode") != "managed":
+            raise AssertionError(f"Managed DspService was not activated: {matches}")
+        self.result["dspService"] = matches[0]
+
+    def expect(self, path, status=200, method="GET", body=None, headers=None, timeout=10):
+        item = self.http(path, method, timeout, body, headers)
+        if item["status"] != status:
+            raise AssertionError(f"Expected HTTP {status}: {item}")
+        return item["body"]
+
+    def wait_api(self):
+        deadline = time.monotonic() + self.args.timeout
+        while time.monotonic() < deadline:
+            try:
+                item = self.http("/devices")
+                if item["status"] == 200 and item["body"].get("mode") == "managed":
+                    return
+            except (OSError, ValueError):
+                pass
+            time.sleep(0.2)
+        raise AssertionError("Managed API did not become available")
+
+    def assert_no_ui(self):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{self.ports['http']}/app/", timeout=5).close()
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                self.result["uiAbsent"] = True
+                return
+            raise
+        raise AssertionError("API-only server registered the optional browser UI")
+
+    def run(self, peers):
+        descriptor = self.inventory()
+        self.control("start")
+        self.control("wait-ssh")
+        self.pid = int((self.home / "karaf.pid").read_text().strip())
+        self.result["pid"] = self.pid
+        self.control("exec", "feature:repo-add " + descriptor.as_uri())
+        self.control("exec", "feature:install dsp408-server")
+        self.wait_api()
+        self.require_service()
+        self.assert_no_ui()
+        actual = str(self.control("exec", "system:property java.awt.headless").get("data", "")).strip()
+        if actual != "true":
+            raise AssertionError(f"Owned JVM is not headless: {actual!r}")
+        self.result["javaHeadless"] = True
+        registry = self.expect("/devices")
+        if registry != {"mode": "managed", "persistent": True, "devices": []}:
+            raise AssertionError(f"Fresh managed server must have no target: {registry}")
+        listing = self.expect("/dsps")
+        if listing.get("dsps") or listing.get("defaultDsp"):
+            raise AssertionError(f"Managed server exposes an implicit target: {listing}")
+        self.expect("/state", 409)
+        self.expect("/health")
+        self.expect("/openapi.json")
+        self.expect("/dsps/missing/state", 404)
+        definitions = {name: {"id": name, "host": "127.0.0.1", "port": peers[peer].port,
+                              "library": "fir408", "autoConnect": False}
+                       for name, peer in (("alpha", "healthy"), ("beta", "beta"), ("silent", "silent"))}
+        for definition in definitions.values():
+            added = self.expect("/devices", 201, "POST", definition)
+            if added != {"device": definition, "created": True}:
+                raise AssertionError(f"Incorrect registration result: {added}")
+        replay = self.expect("/devices", 200, "POST", definitions["alpha"])
+        if replay.get("created"):
+            raise AssertionError("Identical registration must be idempotent")
+        self.expect("/devices", 409, "POST", {**definitions["alpha"], "port": peers["beta"].port})
+        self.expect("/devices", 409, "POST", {**definitions["alpha"], "id": "duplicate"})
+        self.expect("/devices/alpha", 403, "DELETE", headers={"Origin": "http://foreign.invalid"})
+        self.expect("/devices/alpha")
+        if any(peer.connections for peer in peers.values()):
+            raise AssertionError("Registering or inspecting offline devices contacted the network")
+        self.result["registrationHasNoNetworkEffects"] = True
+        for name in ("alpha", "beta"):
+            self.expect(f"/dsps/{name}/connection/connect", method="POST", timeout=60)
+            cache = self.expect(f"/dsps/{name}/settings-cache")
+            caps = self.expect(f"/dsps/{name}/capabilities")
+            if (not cache.get("ready") or cache.get("cachedBlockCount") != 32
+                    or caps.get("deviceVersion") != "FIR408 V0113P"):
+                raise AssertionError(f"Managed target did not bootstrap independently: {name}")
+        healthy_connections = peers["healthy"].connections
+        # Remove a target while its bootstrap is blocked; keep the other live session.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            connecting = pool.submit(self.http, "/dsps/silent/connection/connect", "POST", 20)
+            deadline = time.monotonic() + 5
+            while not peers["silent"].requests and time.monotonic() < deadline:
+                time.sleep(0.01)
+            if not peers["silent"].requests:
+                raise AssertionError("Silent bootstrap was not exercised")
+            self.expect("/devices/silent", 204, "DELETE", timeout=3)
+            cancelled = connecting.result(timeout=5)
+            if cancelled["status"] < 400:
+                raise AssertionError(f"Removed bootstrap falsely completed: {cancelled}")
+        self.expect("/dsps/silent/state", 404)
+        self.expect("/devices/beta", 204, "DELETE")
+        self.expect("/devices/beta", 404)
+        if (not self.expect("/dsps/alpha/state").get("connected")
+                or peers["healthy"].connections != healthy_connections):
+            raise AssertionError("Removing other targets interrupted alpha")
+        self.result["otherConnectionsPreserved"] = True
+        before = self.expect("/devices")
+        self.result["registryBeforeRestart"] = before
+        stores = list((self.home / "data").glob("**/device-registry.json"))
+        if len(stores) != 1:
+            raise AssertionError(f"Expected one persisted OSGi registry: {stores}")
+        stored = stores[0]
+        self.result["registryFile"] = str(stored)
+        self.result["storedRegistrySha256"] = digest(stored)
+        self.shutdown()
+        if not self.result["shutdown"].get("stopped"):
+            raise AssertionError("First owned JVM did not stop")
+        self.result["restartShutdown"] = self.result.pop("shutdown")
+        self.pid = None
+        self.control("start")
+        self.control("wait-ssh")
+        self.pid = int((self.home / "karaf.pid").read_text().strip())
+        self.result["restartedPid"] = self.pid
+        self.wait_api()
+        self.assert_no_ui()
+        after = self.expect("/devices")
+        if before != after or digest(stored) != self.result["storedRegistrySha256"]:
+            raise AssertionError("Device definitions changed or were lost across restart")
+        if (self.expect("/dsps/alpha/state").get("connected")
+                or peers["healthy"].connections != healthy_connections):
+            raise AssertionError("Manual connection was unexpectedly restored as autoConnect")
+        self.result["persistentRestart"] = True
+        self.expect("/dsps/alpha/connection/connect", method="POST", timeout=60)
+        self.expect("/dsps/alpha/connection/disconnect", method="POST")
+        self.expect("/devices/alpha", 204, "DELETE")
+        if self.expect("/devices").get("devices") or self.expect("/dsps").get("dsps"):
+            raise AssertionError("Removing the last device left a hidden default target")
+        self.assert_no_ui()
+        self.control("threads")
+        self.doctor()
+        self.result["ok"] = True
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--maven-repo", required=True, help="Repository containing mvn install outputs")
@@ -726,11 +879,12 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--reconnects", type=int, default=3)
     parser.add_argument("--browser-check", action="store_true", help="Check packaged phone UI against owned loopback DSPs (requires npm ci and Chromium)")
+    parser.add_argument("--headless-registry", action="store_true", help="Verify API-only managed devices, isolation and persistence across a Java restart")
     args = parser.parse_args(argv)
     if args.reconnects < 2:
         parser.error("--reconnects must be at least 2")
     state = prepare_state(args.state_dir)
-    validation = Validation(args, state)
+    validation = (HeadlessValidation if args.headless_registry else Validation)(args, state)
     started = time.monotonic()
     peers = {}
     try:
@@ -739,6 +893,8 @@ def main(argv=None):
                      "silent": stack.enter_context(FakeDsp(mode="silent")),
                      "drop": stack.enter_context(FakeDsp(mode="drop")),
                      "writable": stack.enter_context(FakeDsp(allow_parameter_writes=True))}
+            if args.headless_registry:
+                peers["beta"] = stack.enter_context(FakeDsp())
             try:
                 validation.provision(peers)
                 validation.run(peers)

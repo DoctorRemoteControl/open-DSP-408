@@ -9,6 +9,12 @@ import org.osgi.service.metatype.annotations.ObjectClassDefinition;
 )
 public @interface Dsp408Configuration {
 
+    @AttributeDefinition(name = "Device registry mode", description = "static (legacy configuration) or managed (persistent HTTP device registry).")
+    String registry_mode() default "static";
+
+    @AttributeDefinition(name = "Device registry file", description = "Managed registry JSON path. Empty uses the OSGi bundle data directory.")
+    String registry_file() default "";
+
     @AttributeDefinition(name = "DSP ID")
     String dsp_id() default "main";
 

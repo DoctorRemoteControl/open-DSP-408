@@ -1,5 +1,7 @@
 """Offline regressions for provisioning safety and the loopback DSP peer."""
 import importlib.util
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
 import io
 from argparse import Namespace
 from pathlib import Path
@@ -157,6 +159,37 @@ class ShutdownTest(unittest.TestCase):
             finally:
                 child.terminate()
                 child.wait(timeout=2)
+
+
+
+
+class HeadlessHarnessTest(unittest.TestCase):
+    def test_owned_java_is_headless_without_display_dependency(self):
+        validation = smoke.Validation(Namespace(karaf_version="4.4.11"), Path("/unused"))
+        self.assertIn("-Djava.awt.headless=true", validation.env["KARAF_OPTS"])
+        self.assertNotIn("DISPLAY", validation.env)
+        self.assertNotIn("WAYLAND_DISPLAY", validation.env)
+
+    def test_delete_accepts_empty_no_content_response(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_DELETE(self):
+                self.send_response(204)
+                self.end_headers()
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            validation = smoke.Validation(Namespace(karaf_version="4.4.11"), Path("/unused"))
+            validation.ports = {"http": server.server_port}
+            response = validation.http("/devices/test", "DELETE")
+            self.assertEqual(204, response["status"])
+            self.assertIsNone(response["body"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(3)
 
 
 if __name__ == "__main__":

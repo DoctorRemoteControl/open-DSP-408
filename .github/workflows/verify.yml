@@ -78,6 +78,13 @@ jobs:
           --maven-repo "${{ runner.temp }}/dsp408-m2"
           --state-dir "${{ runner.temp }}/dsp408-connection-stress"
 
+      - name: Verify headless Java API and persistent device registry
+        run: >-
+          python3 open-DSP-408/integration/karaf-smoke.py
+          --maven-repo "${{ runner.temp }}/dsp408-m2"
+          --state-dir "${{ runner.temp }}/dsp408-headless-registry"
+          --headless-registry
+
       - name: Verify fresh Karaf with simulated DSPs
         run: >-
           python3 open-DSP-408/integration/karaf-smoke.py

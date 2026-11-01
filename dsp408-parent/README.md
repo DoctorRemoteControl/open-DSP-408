@@ -236,7 +236,14 @@ feature:repo-add mvn:de.drremote/dsp408-features/0.0.1-SNAPSHOT/xml/features
 
 ### 4. Install features
 
-Install all available DSP modules:
+For a headless API server with a persistent managed device registry:
+
+```text
+feature:install dsp408-server
+```
+
+See [headless setup and API examples](../docs/HEADLESS-SERVER.md).
+Install all available DSP modules, including the optional web interface:
 
 ```bash
 feature:install dsp408-all
@@ -300,7 +307,9 @@ Available features:
 * `dsp408-runtime`
 * `dsp408-shell`
 * `dsp408-matrix`
-* `dsp408-http`
+* `dsp408-http` (API only)
+* `dsp408-server` (managed headless profile)
+* `dsp408-web` (optional browser interface)
 * `dsp408-all`
 
 ### Feature Composition
@@ -337,9 +346,20 @@ Installs:
 * Jackson bundles
 * `dsp408-http`
 
+#### `dsp408-server`
+
+Installs `dsp408-http` and supplies managed registry defaults for a fresh instance.
+Existing operator configuration takes precedence. It starts with zero devices and
+has no browser interface. See [device registry](../docs/HEADLESS-SERVER.md).
+
+#### `dsp408-web`
+
+Installs `dsp408-http` and enables the optional `/app/` servlet through PID
+`de.drremote.dsp408.web`, property `enabled=true`.
+
 #### `dsp408-all`
 
-Installs everything.
+Installs all adapters including `dsp408-web`.
 
 ---
 
@@ -367,6 +387,8 @@ de.drremote.dsp408controller
 
 | Property               | Meaning                                         |
 | ---------------------- | ----------------------------------------------- |
+| `registry.mode`        | `static` compatibility or `managed` persistent API registry |
+| `registry.file`        | persistent JSON path; empty uses OSGi bundle data |
 | `dsp.id`               | default DSP id                                  |
 | `dsp.ip`               | default DSP IP address                          |
 | `dsp.port`             | default DSP TCP port                            |
@@ -387,7 +409,7 @@ de.drremote.dsp408controller
 * Normal settings reads are RAM-only. `POST /refresh` explicitly rebuilds the complete cache from the DSP.
 * Normal writes are sent once and wait for the DSP ACK before updating cached state. A missing ACK closes the session and reports uncertain completion; it does not optimistically update cached state. Legacy writes do not trigger a parameter-block readback; reconnect or explicit `POST /refresh` provides authoritative device state. The additive [`POST /parameters/write`](../docs/PARAMETER-API.md) route can verify gain, mute, phase and delay against a fresh block where the firmware catalog confirms its mapping. It reports ACK, verified, rejected and uncertain outcomes separately; a single verified parameter still leaves the full settings snapshot stale.
 * Pausing meter polling removes pending and selected-but-unsent samples. A sample whose transmission has started completes before the next serialized command. Polling resumes one interval after a control transaction. An unanswered meter sample gets a short recovery pause; verified responses govern keepalive health probes.
-* Old APIs use the default DSP. Multi-DSP APIs use `/api/v1/dsps/{id}/...`.
+* Static mode retains the default DSP. Managed mode has no default and uses `/api/v1/devices` to register definitions; select a device through `/api/v1/dsps/{id}/...`.
 
 Example additional DSPs:
 

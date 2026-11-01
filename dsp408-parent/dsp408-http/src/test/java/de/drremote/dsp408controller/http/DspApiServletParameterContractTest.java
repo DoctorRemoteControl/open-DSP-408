@@ -290,6 +290,8 @@ class DspApiServletParameterContractTest {
         @Override
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
             switch (method.getName()) {
+                case "dspId":
+                    return id;
                 case "forDsp":
                     assertEquals("room2", args[0]);
                     return selected.service;

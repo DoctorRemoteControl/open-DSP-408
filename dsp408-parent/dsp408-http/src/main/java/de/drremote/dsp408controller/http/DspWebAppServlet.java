@@ -9,7 +9,7 @@ import org.osgi.service.component.annotations.*;
 import org.osgi.service.http.*;
 
 /** Serves the bundle's same-origin LAN interface without filesystem access. */
-@Component(immediate = true, service = {})
+@Component(immediate = true, service = {}, configurationPid = "de.drremote.dsp408.web")
 public final class DspWebAppServlet extends HttpServlet {
     static final String HTTP_ALIAS="/app";
     private static final Map<String,String> ASSETS=Map.of(
@@ -20,10 +20,15 @@ public final class DspWebAppServlet extends HttpServlet {
 
     @Reference void bindHttpService(HttpService service){httpService=service;}
     void unbindHttpService(HttpService service){if(httpService==service)httpService=null;}
-    @Activate void activate() throws ServletException,NamespaceException {
-        httpService.registerServlet(HTTP_ALIAS,this,null,null);registered=true;
+    @Activate synchronized void activate(Map<String,Object> configuration) throws ServletException,NamespaceException {
+        modified(configuration);
     }
-    @Deactivate void deactivate(){
+    @Modified synchronized void modified(Map<String,Object> configuration) throws ServletException,NamespaceException {
+        boolean enabled=Boolean.parseBoolean(String.valueOf(configuration.getOrDefault("enabled",false)).trim());
+        if(enabled&&!registered){httpService.registerServlet(HTTP_ALIAS,this,null,null);registered=true;}
+        else if(!enabled)deactivate();
+    }
+    @Deactivate synchronized void deactivate(){
         if(!registered||httpService==null)return;
         try{httpService.unregister(HTTP_ALIAS);}catch(IllegalArgumentException alreadyRemoved){/* Already gone. */}
         finally{registered=false;}

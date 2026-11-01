@@ -37,20 +37,9 @@ final class DspTextCommandGateway {
             return "";
         }
 
-        String lower = normalized.toLowerCase(Locale.ROOT);
-        if (lower.equals("connect") || lower.equals("dsp connect") || lower.equals("!dsp connect")) {
-            return runtime.connect();
-        }
-        if (lower.equals("disconnect")
-                || lower.equals("dsp disconnect")
-                || lower.equals("!dsp disconnect")) {
-            runtime.disconnect();
-            return "Disconnected.";
-        }
-        if (lower.equals("reconnect")
-                || lower.equals("dsp reconnect")
-                || lower.equals("!dsp reconnect")) {
-            return runtime.reconnect();
+        String lifecycle = lifecycleCommand(normalized);
+        if (lifecycle != null) {
+            return executeLifecycle(lifecycle);
         }
         return capture(DspCommandProcessor.CommandMode.CLI, normalized, true);
     }
@@ -60,11 +49,44 @@ final class DspTextCommandGateway {
         if (normalized.isEmpty()) {
             return "";
         }
+        String lifecycle = lifecycleCommand(normalized);
+        if (lifecycle != null) {
+            if (!isAdmin) return "Command disabled in Matrix bot.";
+            try {
+                return executeLifecycle(lifecycle);
+            } catch (Exception error) {
+                return "Error: " + error.getMessage();
+            }
+        }
         return capture(DspCommandProcessor.CommandMode.MATRIX, normalized, isAdmin);
     }
 
     synchronized String executeVolumeRoom(String line) throws Exception {
         return volumeRoom.handleVolumeRoom(line);
+    }
+
+    private String executeLifecycle(String command) throws Exception {
+        return switch (command) {
+            case "connect" -> runtime.connect();
+            case "reconnect" -> runtime.reconnect();
+            case "disconnect", "close" -> {
+                runtime.disconnect();
+                yield "Disconnected.";
+            }
+            default -> throw new IllegalArgumentException("Unknown lifecycle command");
+        };
+    }
+
+    /** Match the processor's tokenization so lifecycle aliases cannot bypass its owner. */
+    private static String lifecycleCommand(String line) {
+        String[] parts = line.split("\\s+");
+        int index = parts[0].equalsIgnoreCase("dsp") || parts[0].equalsIgnoreCase("!dsp") ? 1 : 0;
+        if (index >= parts.length) return null;
+        String command = parts[index].toLowerCase(Locale.ROOT);
+        return switch (command) {
+            case "connect", "reconnect", "disconnect", "close" -> command;
+            default -> null;
+        };
     }
 
     private String capture(

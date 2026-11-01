@@ -11,9 +11,12 @@ HTTP/JSON control API for the DSP408/FIR408 runtime.
 
 ## Purpose
 
-This bundle exposes `DspService` through an OSGi HTTP Whiteboard servlet. It is useful for scripts, dashboards, integrations and smoke tests without using the Karaf shell.
+This bundle exposes `DspService` through an explicitly registered OSGi HttpService servlet. It is useful for scripts, dashboards, integrations and smoke tests without using the Karaf shell.
 
-The same bundle serves the [mobile LAN controller](../../docs/MOBILE-LAN-APP.md) at `/app/`, with packaged same-origin assets and no frontend runtime dependencies.
+The API runs independently of the [optional mobile LAN controller](../../docs/MOBILE-LAN-APP.md).
+`dsp408-http` leaves `/app/` disabled. `dsp408-web` enables the packaged interface
+through PID `de.drremote.dsp408.web`, property `enabled=true`; no frontend runtime
+is needed. See [headless server](../../docs/HEADLESS-SERVER.md) for managed setup.
 
 ## Servlet
 
@@ -27,6 +30,8 @@ The same bundle serves the [mobile LAN controller](../../docs/MOBILE-LAN-APP.md)
 - `GET /api/v1/openapi.json`
 - `GET /api/v1/capabilities`
 - `POST /api/v1/parameters/write`
+- `GET /api/v1/devices` / `POST /api/v1/devices` (persistent managed definitions)
+- `GET /api/v1/devices/{id}` / `DELETE /api/v1/devices/{id}`
 - `GET /api/v1/dsps`
 - `GET /api/v1/dsps/{dspId}/state`
 - `POST /api/v1/dsps/{dspId}/connection/connect`

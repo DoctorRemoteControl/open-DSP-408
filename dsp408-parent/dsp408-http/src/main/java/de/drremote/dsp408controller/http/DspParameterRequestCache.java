@@ -29,6 +29,11 @@ final class DspParameterRequestCache {
 
     ParameterWriteResultDto execute(String key, String dspId, ParameterWriteRequestDto request,
                                    WriteOperation operation) throws Exception {
+        return execute(key, dspId, null, request, operation);
+    }
+
+    ParameterWriteResultDto execute(String key, String dspId, Object targetIdentity,
+                                   ParameterWriteRequestDto request, WriteOperation operation) throws Exception {
         Entry entry;
         boolean owner;
         synchronized (entries) {
@@ -41,9 +46,10 @@ final class DspParameterRequestCache {
                 if (entries.size() >= CAPACITY) {
                     throw new RejectedExecutionException("Parameter request cache is full. Try again later.");
                 }
-                entry = new Entry(dspId, request);
+                entry = new Entry(dspId, targetIdentity, request);
                 entries.put(key, entry);
-            } else if (!Objects.equals(entry.dspId, dspId) || !entry.request.equals(request)) {
+            } else if (!Objects.equals(entry.dspId, dspId) || entry.targetIdentity != targetIdentity
+                    || !entry.request.equals(request)) {
                 throw new IllegalStateException("Idempotency-Key was already used for another parameter request.");
             }
         }
@@ -86,13 +92,15 @@ final class DspParameterRequestCache {
 
     private static final class Entry {
         final String dspId;
+        final Object targetIdentity;
         final ParameterWriteRequestDto request;
         final CompletableFuture<ParameterWriteResultDto> outcome = new CompletableFuture<>();
         long completedAt;
         boolean completed;
 
-        Entry(String dspId, ParameterWriteRequestDto request) {
+        Entry(String dspId, Object targetIdentity, ParameterWriteRequestDto request) {
             this.dspId = dspId;
+            this.targetIdentity = targetIdentity;
             this.request = request;
         }
     }

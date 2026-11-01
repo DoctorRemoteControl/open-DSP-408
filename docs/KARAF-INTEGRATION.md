@@ -44,6 +44,7 @@ Optional arguments:
 | `--timeout` | `180` | Timeout in seconds per Karaf control command |
 | `--reconnects` | `3` | Complete fake DSP connection cycles, minimum 2 |
 | `--result-json` | none | Additional JSON output destination |
+| `--headless-registry` | disabled | API-only managed registry, isolated targets and JVM restart |
 
 The command prints JSON to stdout, progress to stderr, and always writes
 `STATE/result.json` after a provisioned run. Exit status zero requires all checks
@@ -56,6 +57,26 @@ their ports closed. It never starts or changes the historical workspace Karaf.
 If the stop wrapper cannot launch or times out, cleanup records the error and
 falls back to signals, checking ownership again before each signal. An unrelated
 PID is never stopped. Offline tests exercise both paths with harmless children.
+
+## Headless managed server
+
+Run the API-first acceptance check independently of browser tooling:
+
+```sh
+python3 integration/karaf-smoke.py \
+  --maven-repo /tmp/dsp408-m2 \
+  --state-dir /tmp/dsp408-headless-registry \
+  --headless-registry
+```
+
+This installs `dsp408-server` into a fresh Java 21 JVM, with no display environment
+and `java.awt.headless=true`. The feature's own configuration must produce an empty
+managed registry. The test registers loopback devices, requires no unsolicited
+connections, connects two devices, removes a blocked third bootstrap and another
+live device without interrupting the first, and restarts the complete JVM. Stored
+definitions must survive; manually connected devices must remain offline after
+restart. `/app/` must return 404 throughout. No browser or Node executable is used.
+All ports, owned processes and fixture threads must close on completion.
 
 ## What is checked
 
@@ -138,3 +159,20 @@ and its writable loopback peer. It explicitly connects the fixture, moves Out8
 gain, requires an ACK and timing feedback, then disconnects. `browser-ui.json`
 and its screenshot are retained in the state directory. No physical DSP is used.
 `DSP408_BROWSER_BIN` may select an installed local Chromium-compatible browser.
+
+
+## Headless registry validation on 2026-11-01
+
+The fresh managed profile passed with Java headless mode, 36 HTTP requests and a
+complete owned JVM restart. Registration produced no device traffic; removing a
+blocked bootstrap and another live target preserved the remaining connection.
+Definitions survived restart without converting a manual connection into
+auto-connect. The optional UI returned 404 throughout. Both JVMs, listeners and
+fixture threads stopped. The first run exposed an SCR activation overload: the
+single-argument internal helper was selected instead of the BundleContext entry.
+The annotated activation method now has a distinct name; default bundle-data
+storage is exercised by the integration rather than hidden behind an explicit
+registry path. Independent review also exposed a static-to-managed admission
+race; connect and reconnect now validate mode and enqueue atomically, while
+waiting outside the component monitor. Two loopback regressions failed on real
+hidden TCP connections before that fix and pass afterward.

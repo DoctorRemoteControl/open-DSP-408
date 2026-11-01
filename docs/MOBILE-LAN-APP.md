@@ -1,6 +1,7 @@
 # Mobile LAN controller
 
-The `dsp408-http` feature now serves DSP Raider at `/app/` alongside `/api/v1`.
+The optional `dsp408-web` feature serves DSP Raider at `/app/` alongside `/api/v1`.
+The API-only `dsp408-http` and managed `dsp408-server` features do not enable the UI.
 Open `http://<server-LAN-address>:8181/app/` on a phone in the server's reachable
 local network, using the HTTP port configured for that Karaf instance. The server
 connects to the DSP; browser clients share its device state and connections.
@@ -13,7 +14,7 @@ Build/install the coherent Controller and pinned protocol source using
 
 ```text
 feature:repo-add mvn:de.drremote/dsp408-features/0.0.1-SNAPSHOT/xml/features
-feature:install dsp408-http
+feature:install dsp408-web
 ```
 
 `dsp408-all` includes the same browser interface. Install API/core/runtime/HTTP

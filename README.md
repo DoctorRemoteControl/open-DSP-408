@@ -5,7 +5,9 @@ reactor is in [`dsp408-parent`](dsp408-parent/README.md); it contains the core
 protocol client, runtime service, shell, HTTP API, Matrix integration and Karaf
 features.
 
-The HTTP feature includes the [mobile LAN browser controller](docs/MOBILE-LAN-APP.md) at `/app/`.
+Use the [headless Java server](docs/HEADLESS-SERVER.md) to register and control
+multiple DSPs through its persistent HTTP API. The server runs without a display
+or browser. The [mobile LAN controller](docs/MOBILE-LAN-APP.md) is optional.
 
 ## Build and test
 
@@ -59,6 +61,7 @@ do not contact the physical DSP. In the complete local DSP408 workspace,
 
 ## Documentation
 
+- [Headless server and device registry](docs/HEADLESS-SERVER.md)
 - [Mobile LAN controller](docs/MOBILE-LAN-APP.md)
 - [Control latency and network-fault evidence](docs/LATENCY-VALIDATION.md)
 - [Firmware-aware parameter API](docs/PARAMETER-API.md)
@@ -70,6 +73,7 @@ do not contact the physical DSP. In the complete local DSP408 workspace,
 - [Runtime configuration](dsp408-parent/dsp408-runtime/README.md)
 - [Protocol evidence and field libraries](dsp408-parent/docs/protocol-spec/README.md)
 
-The default configured device is `192.168.0.166:9761`. Build artifacts are
+Managed server mode starts with no devices; static compatibility mode defaults
+to `192.168.0.166:9761`. Build artifacts are
 independent from an installed Karaf instance; a successful build does not
 identify or replace the bundles currently loaded there.

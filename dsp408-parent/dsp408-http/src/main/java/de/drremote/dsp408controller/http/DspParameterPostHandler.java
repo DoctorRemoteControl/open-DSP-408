@@ -48,7 +48,7 @@ final class DspParameterPostHandler {
             DspParameterRequestCache.WriteOperation operation = () -> interactive
                     ? dsp.writeParameterInteractive(write) : dsp.writeParameter(write);
             ParameterWriteResultDto result = key == null ? operation.execute()
-                    : requests.execute(key, dsp.dspId(), write, operation);
+                    : requests.execute(key, dsp.dspId(), dsp, write, operation);
             setTiming(response, started);
             responses.writeJson(response, httpStatus(result), result);
         } catch (Exception | Error failure) {

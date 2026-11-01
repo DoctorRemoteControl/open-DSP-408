@@ -37,8 +37,33 @@ class DspWebAppServletTest {
             if(m.getName().equals("registerServlet")){assertSame(DspWebAppServlet.class,a[1].getClass());events.add("register:"+a[0]);}
             if(m.getName().equals("unregister"))events.add("unregister:"+a[0]);return null;
         });
-        DspWebAppServlet servlet=new DspWebAppServlet();servlet.bindHttpService(service);servlet.activate();servlet.deactivate();servlet.deactivate();
+        DspWebAppServlet servlet=new DspWebAppServlet();servlet.bindHttpService(service);servlet.activate(Map.of("enabled",true));servlet.deactivate();servlet.deactivate();
         assertEquals(List.of("register:/app","unregister:/app"),events);
+    }
+    @Test void interfaceIsDisabledWhenNoConfigurationOptsIn() throws Exception {
+        List<String> events=new ArrayList<>();
+        HttpService service=httpService(events);
+        DspWebAppServlet servlet=new DspWebAppServlet();servlet.bindHttpService(service);
+        servlet.activate(Map.of());servlet.deactivate();
+        assertTrue(events.isEmpty(),"A headless HTTP installation must not register /app.");
+    }
+    @Test void interfaceCanBeEnabledAndDisabledWithoutDuplicateAliasRegistrations() throws Exception {
+        List<String> events=new ArrayList<>();
+        DspWebAppServlet servlet=new DspWebAppServlet();servlet.bindHttpService(httpService(events));
+        servlet.activate(Map.of());
+        servlet.modified(Map.of("enabled",true));
+        servlet.modified(Map.of("enabled",true));
+        servlet.modified(Map.of("enabled",false));
+        servlet.modified(Map.of());
+        servlet.modified(Map.of("enabled",true));
+        servlet.deactivate();servlet.deactivate();
+        assertEquals(List.of("register:/app","unregister:/app","register:/app","unregister:/app"),events);
+    }
+    private static HttpService httpService(List<String> events) {
+        return (HttpService)Proxy.newProxyInstance(DspWebAppServletTest.class.getClassLoader(),new Class[]{HttpService.class},(p,m,a)->{
+            if(m.getName().equals("registerServlet"))events.add("register:"+a[0]);
+            if(m.getName().equals("unregister"))events.add("unregister:"+a[0]);return null;
+        });
     }
     @ParameterizedTest @ValueSource(strings={"http://other.local:8181","null","https://dsp.local:8181","http://dsp.local:8182","http://user@dsp.local:8181","http://dsp.local:8181/path"})
     void foreignBrowserWritesRejectBeforeResolvingAnyDevice(String origin) throws Exception {

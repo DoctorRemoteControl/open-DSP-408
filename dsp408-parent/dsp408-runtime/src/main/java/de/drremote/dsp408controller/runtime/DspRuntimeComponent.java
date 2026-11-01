@@ -1,6 +1,11 @@
 package de.drremote.dsp408controller.runtime;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.nio.file.Path;
+import java.util.Locale;
+
+import org.osgi.framework.BundleContext;
 
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
@@ -21,6 +26,10 @@ import de.drremote.dsp408.api.ChannelDto;
 import de.drremote.dsp408.api.DeviceInfoDto;
 import de.drremote.dsp408.api.DspInstanceDto;
 import de.drremote.dsp408.api.DspService;
+import de.drremote.dsp408.api.DspDeviceConflictException;
+import de.drremote.dsp408.api.DspDeviceDefinitionDto;
+import de.drremote.dsp408.api.DspDeviceRegistrationDto;
+import de.drremote.dsp408.api.DspDeviceRegistryDto;
 import de.drremote.dsp408.api.InputCompressorDto;
 import de.drremote.dsp408.api.InputGateDto;
 import de.drremote.dsp408.api.LimiterDto;
@@ -132,22 +141,43 @@ public final class DspRuntimeComponent implements DspService {
     );
 
     private final DspDevicePool devicePool;
+    private volatile DspManagedDeviceRegistry managedRegistry;
+    private BundleContext bundleContext;
+    private final boolean lazyWatchdog;
 
     public DspRuntimeComponent() {
         this(true);
     }
 
     DspRuntimeComponent(boolean manageDevicePool) {
+        this(manageDevicePool, false);
+    }
+
+    DspRuntimeComponent(boolean manageDevicePool, boolean lazyWatchdog) {
         this.devicePool = new DspDevicePool(this, manageDevicePool);
+        this.lazyWatchdog = lazyWatchdog;
     }
 
     @Activate
-    void activate(Dsp408Configuration configuration) {
+    synchronized void activateComponent(BundleContext context, Dsp408Configuration configuration) {
+        bundleContext = context;
+        activate(configuration);
+    }
+
+    synchronized void activate(Dsp408Configuration configuration) {
+        if (isManaged(configuration)) {
+            DspManagedDeviceRegistry registry = new DspManagedDeviceRegistry(registryPath(configuration), configuration);
+            runtimeSettings.apply(configuration);
+            managedRegistry = registry;
+            registry.startAutoConnections();
+            LOG.info("DSP408 managed device registry activated ({})", registry.path());
+            return;
+        }
         runtimeSettings.apply(configuration);
         controller.setPreferredLibraryType(configuration.dsp_library());
         devicePool.rebuild(configuration);
         connectionManager.setReconnectDesired(configuration.auto_connect());
-        connectionManager.startWatchdog();
+        if (!lazyWatchdog || configuration.auto_connect()) connectionManager.startWatchdog();
 
         LOG.info(
                 "DSP408 {} activated ({}:{})",
@@ -161,7 +191,34 @@ public final class DspRuntimeComponent implements DspService {
     }
 
     @Modified
-    void modified(Dsp408Configuration configuration) {
+    synchronized void modified(Dsp408Configuration configuration) {
+        boolean nextManaged = isManaged(configuration);
+        DspManagedDeviceRegistry current = managedRegistry;
+        Path nextPath = nextManaged ? registryPath(configuration) : null;
+        if (current != null && (!nextManaged || !current.path().equals(nextPath)) && !current.isEmpty()) {
+            throw new DspDeviceConflictException("Remove all registered devices before changing registry mode or storage path");
+        }
+        if (nextManaged) {
+            if (current != null && current.path().equals(nextPath)) {
+                current.updateConfiguration(configuration);
+                runtimeSettings.apply(configuration);
+                return;
+            }
+            DspManagedDeviceRegistry replacement = new DspManagedDeviceRegistry(nextPath, configuration);
+            connectionManager.disconnect();
+            connectionManager.stopWatchdog();
+            devicePool.close();
+            if (current != null) current.close();
+            managedRegistry = replacement;
+            runtimeSettings.apply(configuration);
+            replacement.startAutoConnections();
+            return;
+        }
+        if (current != null) {
+            current.close();
+            managedRegistry = null;
+            connectionManager.startWatchdog();
+        }
         DspRuntimeSettings.Update update = runtimeSettings.apply(configuration);
         boolean reconnectNeeded = update.connectionChanged();
         controller.setPreferredLibraryType(configuration.dsp_library());
@@ -175,6 +232,7 @@ public final class DspRuntimeComponent implements DspService {
         }
 
         connectionManager.setReconnectDesired(configuration.auto_connect());
+        if (configuration.auto_connect()) connectionManager.startWatchdog();
         if (reconnectNeeded) {
             autoLimit.invalidateUndo();
             if (configuration.auto_connect() || controller.isConnected()) {
@@ -190,7 +248,9 @@ public final class DspRuntimeComponent implements DspService {
     }
 
     @Deactivate
-    void deactivate() {
+    synchronized void deactivate() {
+        DspManagedDeviceRegistry current = managedRegistry;
+        if (current != null) current.close();
         connectionManager.close();
         devicePool.close();
         autoLimit.close();
@@ -198,17 +258,63 @@ public final class DspRuntimeComponent implements DspService {
 
     @Override
     public String dspId() {
-        return runtimeSettings.instanceId();
+        return managedRegistry == null ? runtimeSettings.instanceId() : "";
     }
 
     @Override
     public List<DspInstanceDto> getDspInstances() {
-        return devicePool.instances();
+        DspManagedDeviceRegistry current = managedRegistry;
+        return current == null ? devicePool.instances() : current.instances();
     }
 
     @Override
     public DspService forDsp(String dspId) {
-        return devicePool.resolve(dspId);
+        DspManagedDeviceRegistry current = managedRegistry;
+        return current == null ? devicePool.resolve(dspId) : current.resolve(dspId);
+    }
+
+    @Override
+    public DspDeviceRegistryDto getDeviceRegistry() {
+        DspManagedDeviceRegistry current = managedRegistry;
+        return current == null ? new DspDeviceRegistryDto("static", false, List.of()) : current.snapshot();
+    }
+
+    @Override
+    public synchronized DspDeviceRegistrationDto registerDevice(DspDeviceDefinitionDto definition) {
+        return requireManagedRegistry().register(definition);
+    }
+
+    @Override
+    public synchronized void removeDevice(String id) {
+        requireManagedRegistry().remove(id);
+    }
+
+    private DspManagedDeviceRegistry requireManagedRegistry() {
+        DspManagedDeviceRegistry current = managedRegistry;
+        if (current == null) throw new UnsupportedOperationException("Set registry_mode=managed to register devices");
+        return current;
+    }
+
+    private static boolean isManaged(Dsp408Configuration configuration) {
+        String mode = configuration.registry_mode().trim().toLowerCase(Locale.ROOT);
+        if (!mode.equals("static") && !mode.equals("managed")) {
+            throw new IllegalArgumentException("registry_mode must be static or managed");
+        }
+        return mode.equals("managed");
+    }
+
+    private Path registryPath(Dsp408Configuration configuration) {
+        String configured = configuration.registry_file();
+        if (configured != null && !configured.isBlank()) return Path.of(configured).toAbsolutePath().normalize();
+        java.io.File fallback = bundleContext == null ? null : bundleContext.getDataFile("device-registry.json");
+        if (fallback == null) throw new IllegalStateException("Managed mode requires registry_file or an OSGi bundle data directory");
+        return fallback.toPath().toAbsolutePath().normalize();
+    }
+
+    private void requirePhysicalDevice() {
+        if (managedRegistry != null) {
+            throw new DspDeviceConflictException("Select a registered DSP id; the managed registry has no default device");
+        }
     }
 
     @Override
@@ -233,19 +339,32 @@ public final class DspRuntimeComponent implements DspService {
 
     @Override
     public String connect() throws Exception {
-        return connectionManager.connect();
+        CompletableFuture<String> result;
+        synchronized (this) {
+            requirePhysicalDevice();
+            connectionManager.startWatchdog();
+            result = connectionManager.requestConnect();
+        }
+        return DspConnectionManager.await(result);
     }
 
     @Override
     public String reconnect() throws Exception {
-        autoLimit.invalidateUndo();
-        return connectionManager.reconnect();
+        CompletableFuture<String> result;
+        synchronized (this) {
+            requirePhysicalDevice();
+            autoLimit.invalidateUndo();
+            connectionManager.startWatchdog();
+            result = connectionManager.requestReconnect();
+        }
+        return DspConnectionManager.await(result);
     }
 
     @Override
     public void disconnect() {
         autoLimit.invalidateUndo();
         connectionManager.disconnect();
+        if (lazyWatchdog) connectionManager.stopWatchdog();
     }
 
     @Override

@@ -4,7 +4,7 @@
     "title": "DSP408 Control API",
     "version": "0.0.1-SNAPSHOT",
     "summary": "HTTP/JSON API for controlling and querying a t.racks / Thomann DSP 408",
-    "description": "Covers the decoded DSP408 functions implemented in dsp408-core. Functions marked not_decoded in DspLib-408.json are intentionally not exposed as high-level endpoints. The /api/v1/command endpoint can execute the existing shell command surface as a compatibility fallback."
+    "description": "Covers the decoded DSP408 functions implemented in dsp408-core. Functions marked not_decoded in DspLib-408.json are intentionally not exposed as high-level endpoints. The /api/v1/command endpoint can execute the existing shell command surface as a compatibility fallback. The API runs on Java 21 without a browser or display. Managed registry mode starts with no devices and persists immutable device definitions. Registering a device defaults to no network traffic; use autoConnect=true or a selected /api/v1/dsps/{dspId}/connection/connect request to connect. Root device-control routes return 409 in managed mode: choose a device ID. /health, /help, /openapi.json, /dsps and /devices remain available."
   },
   "servers": [
     {
@@ -43,6 +43,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/ParameterCapabilitiesResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ManagedTargetRequiredResponse"
           }
         }
       }
@@ -100,6 +103,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/ParameterCapabilitiesResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/DeviceNotFoundResponse"
           }
         },
         "parameters": [
@@ -140,6 +146,9 @@
           },
           "403": {
             "description": "The browser Origin does not match the directly served DSP server origin."
+          },
+          "404": {
+            "$ref": "#/components/responses/DeviceNotFoundResponse"
           }
         },
         "parameters": [
@@ -159,109 +168,252 @@
     "/api/v1/help": {"get": {"tags": ["meta"], "summary": "Get shell help text", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/openapi.json": {"get": {"tags": ["meta"], "summary": "Get this OpenAPI document", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/dsps": {"get": {"tags": ["dsps"], "summary": "List configured DSP instances", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/dsps/{dspId}/state": {"get": {"tags": ["dsps"], "summary": "Get state for a specific DSP instance", "description": "Most single-DSP endpoints can be prefixed with /api/v1/dsps/{dspId}, for example /api/v1/dsps/main/channels/out1/gain.", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/dsps/{dspId}/meters": {"get": {"tags": ["dsps", "meters"], "summary": "Get cached runtime meters for a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/MeterStateResponse"}}}},
-    "/api/v1/dsps/{dspId}/meters/read": {"post": {"tags": ["dsps", "meters"], "summary": "Legacy cache-only meter endpoint", "description": "The server-owned central poller is the only component that requests fresh DSP meter frames.", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/StateDtoResponse"}, "409": {"description": "DSP is disconnected; cached meters remain available through GET /meters.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Object"}, "example": {"error": "dsp_not_connected", "message": "DSP main is not connected.", "status": 409}}}}}}},
-    "/api/v1/dsps/{dspId}/connection/connect": {"post": {"tags": ["dsps"], "summary": "Connect a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/dsps/{dspId}/channels/{channelId}/gain": {"post": {"tags": ["dsps"], "summary": "Set gain on a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}, {"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/dsps/{dspId}/preset/validate": {"post": {"tags": ["dsps", "preset"], "summary": "Validate a JSON preset for a specific DSP without changing hardware", "parameters": [{"$ref": "#/components/parameters/dspId"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetValidationResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/dsps/{dspId}/preset/apply": {"post": {"tags": ["dsps", "preset"], "summary": "Safely apply a JSON preset to a specific DSP", "description": "The document is fully validated before writes. All channels are muted first, and an emergency mute is attempted if an operation fails.", "parameters": [{"$ref": "#/components/parameters/dspId"}, {"$ref": "#/components/parameters/unmuteSelected"}, {"$ref": "#/components/parameters/refreshPreset"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetApplyResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "500": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/state": {"get": {"tags": ["device"], "summary": "Get known DSP state", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/status": {"get": {"tags": ["device"], "summary": "Alias for state", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/traffic": {"get": {"tags": ["debug"], "summary": "Get command queue, central meter poller and ACK retry diagnostics", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/settings-cache": {"get": {"tags": ["device", "blocks"], "summary": "Get server-side DSP settings cache status", "description": "READY means normal settings reads are served completely from RAM without DSP parameter requests.", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/dsps/{dspId}/state": {"get": {"tags": ["dsps"], "summary": "Get state for a specific DSP instance", "description": "Most single-DSP endpoints can be prefixed with /api/v1/dsps/{dspId}, for example /api/v1/dsps/main/channels/out1/gain.", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "404": {"$ref": "#/components/responses/DeviceNotFoundResponse"}}}},
+    "/api/v1/dsps/{dspId}/meters": {"get": {"tags": ["dsps", "meters"], "summary": "Get cached runtime meters for a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/MeterStateResponse"}, "404": {"$ref": "#/components/responses/DeviceNotFoundResponse"}}}},
+    "/api/v1/dsps/{dspId}/meters/read": {"post": {"tags": ["dsps", "meters"], "summary": "Legacy cache-only meter endpoint", "description": "The server-owned central poller is the only component that requests fresh DSP meter frames.", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/StateDtoResponse"}, "409": {"description": "DSP is disconnected; cached meters remain available through GET /meters.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Object"}, "example": {"error": "dsp_not_connected", "message": "DSP main is not connected.", "status": 409}}}}, "404": {"$ref": "#/components/responses/DeviceNotFoundResponse"}}}},
+    "/api/v1/dsps/{dspId}/connection/connect": {"post": {"tags": ["dsps"], "summary": "Connect a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "404": {"$ref": "#/components/responses/DeviceNotFoundResponse"}}}},
+    "/api/v1/dsps/{dspId}/channels/{channelId}/gain": {"post": {"tags": ["dsps"], "summary": "Set gain on a specific DSP instance", "parameters": [{"$ref": "#/components/parameters/dspId"}, {"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "404": {"$ref": "#/components/responses/DeviceNotFoundResponse"}}}},
+    "/api/v1/dsps/{dspId}/preset/validate": {"post": {"tags": ["dsps", "preset"], "summary": "Validate a JSON preset for a specific DSP without changing hardware", "parameters": [{"$ref": "#/components/parameters/dspId"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetValidationResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "404": {"$ref": "#/components/responses/DeviceNotFoundResponse"}}}},
+    "/api/v1/dsps/{dspId}/preset/apply": {"post": {"tags": ["dsps", "preset"], "summary": "Safely apply a JSON preset to a specific DSP", "description": "The document is fully validated before writes. All channels are muted first, and an emergency mute is attempted if an operation fails.", "parameters": [{"$ref": "#/components/parameters/dspId"}, {"$ref": "#/components/parameters/unmuteSelected"}, {"$ref": "#/components/parameters/refreshPreset"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetApplyResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "500": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "404": {"$ref": "#/components/responses/DeviceNotFoundResponse"}}}},
+    "/api/v1/state": {"get": {"tags": ["device"], "summary": "Get known DSP state", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/status": {"get": {"tags": ["device"], "summary": "Alias for state", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/traffic": {"get": {"tags": ["debug"], "summary": "Get command queue, central meter poller and ACK retry diagnostics", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/settings-cache": {"get": {"tags": ["device", "blocks"], "summary": "Get server-side DSP settings cache status", "description": "READY means normal settings reads are served completely from RAM without DSP parameter requests.", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
     "/api/v1/preset/export": {"get": {"tags": ["preset", "blocks"], "summary": "Read all FIR408 parameter blocks and export the complete DSP state as JSON", "description": "The response contains all 32 authoritative raw blocks, their SHA-256 digest, and the decoded controller view. Exact restore is performed with a native U01..U19 DSP slot because FIR408 has no raw block-write command.", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/auto-limit/lock": {
-      "get": {"tags": ["dynamics"], "summary": "Get the current Auto-Limit lease", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}},
+      "get": {"tags": ["dynamics"], "summary": "Get the current Auto-Limit lease", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}},
       "post": {"tags": ["dynamics"], "summary": "Acquire the exclusive Auto-Limit lease", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}
     },
     "/api/v1/auto-limit/lock/renew": {"post": {"tags": ["dynamics"], "summary": "Renew an Auto-Limit lease", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
     "/api/v1/auto-limit/lock/release": {"post": {"tags": ["dynamics"], "summary": "Release an Auto-Limit lease", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/auto-limit/status": {"get": {"tags": ["dynamics"], "summary": "Get the server-owned Auto-Limit job status", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/auto-limit/status": {"get": {"tags": ["dynamics"], "summary": "Get the server-owned Auto-Limit job status", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
     "/api/v1/auto-limit/start": {"post": {"tags": ["dynamics"], "summary": "Start an asynchronous server-owned Auto-Limit job", "description": "Body fields: headroomDb, targetMode=ACTIVE_OUTPUTS|ALL_OUTPUTS, measurementMs. The server continues when the client disconnects.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"202": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/auto-limit/cancel": {"post": {"tags": ["dynamics"], "summary": "Cancel the server Auto-Limit job and restore previous limiter values", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/auto-limit/cancel": {"post": {"tags": ["dynamics"], "summary": "Cancel the server Auto-Limit job and restore previous limiter values", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
     "/api/v1/auto-limit/undo": {"post": {"tags": ["dynamics"], "summary": "Restore limiter and output-gain values saved before the last successful Auto-Limit job", "responses": {"202": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/device": {"get": {"tags": ["device"], "summary": "Get device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/deviceinfo": {"get": {"tags": ["device"], "summary": "Alias for device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/info": {"get": {"tags": ["device"], "summary": "Alias for device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/device/login": {"post": {"tags": ["device"], "summary": "Send login PIN", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/connection/connect": {"post": {"tags": ["connection"], "summary": "Connect to DSP", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/connection/reconnect": {"post": {"tags": ["connection"], "summary": "Reconnect to DSP", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/connection/disconnect": {"post": {"tags": ["connection"], "summary": "Disconnect from DSP", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/command": {"post": {"tags": ["debug"], "summary": "Execute shell or matrix command", "description": "Body: line, optional mode=shell|matrix, optional admin=true|false.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels": {"get": {"tags": ["channels"], "summary": "List channels", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/channels/{channelId}": {"get": {"tags": ["channels"], "summary": "Get channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/channels/{channelId}/meter": {"get": {"tags": ["channels", "meters"], "summary": "Get cached runtime meter for one channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/MeterResponse"}}}},
-    "/api/v1/channels/{channelId}/name": {"post": {"tags": ["channels"], "summary": "Set channel name", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/gain": {"post": {"tags": ["channels"], "summary": "Set gain", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/mute": {"post": {"tags": ["channels"], "summary": "Mute channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/unmute": {"post": {"tags": ["channels"], "summary": "Unmute channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/phase": {"post": {"tags": ["channels"], "summary": "Set phase", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/delay": {"post": {"tags": ["channels"], "summary": "Set delay", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/delay-unit": {"post": {"tags": ["channels"], "summary": "Set delay unit", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/preset/load": {"post": {"tags": ["device"], "summary": "Load preset by slot or index", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
+    "/api/v1/device": {"get": {"tags": ["device"], "summary": "Get device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/deviceinfo": {"get": {"tags": ["device"], "summary": "Alias for device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/info": {"get": {"tags": ["device"], "summary": "Alias for device info", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/device/login": {"post": {"tags": ["device"], "summary": "Send login PIN", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/connection/connect": {"post": {"tags": ["connection"], "summary": "Connect to DSP", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/connection/reconnect": {"post": {"tags": ["connection"], "summary": "Reconnect to DSP", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/connection/disconnect": {"post": {"tags": ["connection"], "summary": "Disconnect from DSP", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/command": {"post": {"tags": ["debug"], "summary": "Execute shell or matrix command", "description": "Body: line, optional mode=shell|matrix, optional admin=true|false.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels": {"get": {"tags": ["channels"], "summary": "List channels", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}": {"get": {"tags": ["channels"], "summary": "Get channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/meter": {"get": {"tags": ["channels", "meters"], "summary": "Get cached runtime meter for one channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/MeterResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/name": {"post": {"tags": ["channels"], "summary": "Set channel name", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/gain": {"post": {"tags": ["channels"], "summary": "Set gain", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/mute": {"post": {"tags": ["channels"], "summary": "Mute channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/unmute": {"post": {"tags": ["channels"], "summary": "Unmute channel", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/phase": {"post": {"tags": ["channels"], "summary": "Set phase", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/delay": {"post": {"tags": ["channels"], "summary": "Set delay", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/delay-unit": {"post": {"tags": ["channels"], "summary": "Set delay unit", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/preset/load": {"post": {"tags": ["device"], "summary": "Load preset by slot or index", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
     "/api/v1/preset/store": {"post": {"tags": ["preset", "device"], "summary": "Store the complete active DSP state in native user slot U01..U19", "description": "JSON body: slot and a printable ASCII name of at most 14 characters. The server writes the name, stores the slot and verifies the name by reading it back from the DSP.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/preset/name/read": {"post": {"tags": ["device"], "summary": "Request preset name", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/preset/validate": {"post": {"tags": ["preset"], "summary": "Validate a complete JSON preset without changing the DSP", "description": "Accepts the preset document directly, so files can be posted with curl --data-binary @preset.json.", "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetValidationResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}}}},
+    "/api/v1/preset/name/read": {"post": {"tags": ["device"], "summary": "Request preset name", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/preset/validate": {"post": {"tags": ["preset"], "summary": "Validate a complete JSON preset without changing the DSP", "description": "Accepts the preset document directly, so files can be posted with curl --data-binary @preset.json.", "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetValidationResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
     "/api/v1/preset/apply": {"post": {"tags": ["preset"], "summary": "Safely apply a complete JSON preset", "description": "The document is fully validated before writes. All channels are muted first. unmuteAfterApply is only honored when unmuteSelected=true.", "parameters": [{"$ref": "#/components/parameters/unmuteSelected"}, {"$ref": "#/components/parameters/refreshPreset"}], "requestBody": {"$ref": "#/components/requestBodies/JsonPresetBody"}, "responses": {"200": {"$ref": "#/components/responses/JsonPresetApplyResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "422": {"$ref": "#/components/responses/ObjectResponse"}, "500": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/peq": {"get": {"tags": ["peq"], "summary": "Get all decoded PEQ parameters and bypass states", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/peq/{channelId}": {"get": {"tags": ["peq"], "summary": "Get decoded PEQ state for one input or output", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/channels/{channelId}/peq/{peqIndex}": {"post": {"tags": ["peq"], "summary": "Set full output PEQ band", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/peq/{peqIndex}/frequency": {"post": {"tags": ["peq"], "summary": "Set output PEQ frequency", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/peq/{peqIndex}/q": {"post": {"tags": ["peq"], "summary": "Set output PEQ Q", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/peq/{peqIndex}/q/raw": {"post": {"tags": ["peq"], "summary": "Set output PEQ raw Q", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/peq/{peqIndex}/gain": {"post": {"tags": ["peq"], "summary": "Set output PEQ gain", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/peq/{peqIndex}/gain/code": {"post": {"tags": ["peq"], "summary": "Set output PEQ raw gain code", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/channels/{channelId}/peq/{peqIndex}/type": {"post": {"tags": ["peq"], "summary": "Set output PEQ type", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
+    "/api/v1/peq": {"get": {"tags": ["peq"], "summary": "Get all decoded PEQ parameters and bypass states", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/peq/{channelId}": {"get": {"tags": ["peq"], "summary": "Get decoded PEQ state for one input or output", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/peq/{peqIndex}": {"post": {"tags": ["peq"], "summary": "Set full output PEQ band", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/peq/{peqIndex}/frequency": {"post": {"tags": ["peq"], "summary": "Set output PEQ frequency", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/peq/{peqIndex}/q": {"post": {"tags": ["peq"], "summary": "Set output PEQ Q", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/peq/{peqIndex}/q/raw": {"post": {"tags": ["peq"], "summary": "Set output PEQ raw Q", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/peq/{peqIndex}/gain": {"post": {"tags": ["peq"], "summary": "Set output PEQ gain", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/peq/{peqIndex}/gain/code": {"post": {"tags": ["peq"], "summary": "Set output PEQ raw gain code", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/channels/{channelId}/peq/{peqIndex}/type": {"post": {"tags": ["peq"], "summary": "Set output PEQ type", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
     "/api/v1/channels/{channelId}/peq/{peqIndex}/bypass": {"post": {"tags": ["peq"], "summary": "Set output PEQ bypass while preserving gain, frequency, Q and type", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/peq/bypass-all": {"post": {"tags": ["peq"], "summary": "Set bypass on all 104 input and output PEQs", "description": "Preflights the complete cached PEQ state before sending any command, then writes 4x8 input and 8x9 output bands while preserving every stored PEQ parameter.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/channels/{channelId}/input-peq/{peqIndex}": {"post": {"tags": ["peq"], "summary": "Set full input PEQ band", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/channels/{channelId}/input-peq/{peqIndex}/{field}": {"post": {"tags": ["peq"], "summary": "Set input PEQ field: frequency, q, gain, type, bypass", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"$ref": "#/components/parameters/peqIndex"}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/channels/{channelId}/geq/{bandIndex}/gain": {"post": {"tags": ["geq"], "summary": "Set input GEQ band gain", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "bandIndex", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 31}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/channels/{channelId}/gate": {
-      "get": {"tags": ["gate"], "summary": "Get cached input gate state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}},
+      "get": {"tags": ["gate"], "summary": "Get cached input gate state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}},
       "post": {"tags": ["gate"], "summary": "Set full input gate", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}
     },
     "/api/v1/channels/{channelId}/gate/{field}": {"post": {"tags": ["gate"], "summary": "Set gate field: threshold, hold, attack, release", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/channels/{channelId}/crossover/{filter}": {"post": {"tags": ["crossover"], "summary": "Set crossover filter hp or lp", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "filter", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/channels/{channelId}/crossover/{filter}/{field}": {"post": {"tags": ["crossover"], "summary": "Set crossover field: frequency, slope, bypass", "parameters": [{"$ref": "#/components/parameters/channelId"}, {"name": "filter", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "field", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/matrix": {"get": {"tags": ["matrix"], "summary": "Get all cached matrix routes and crosspoint gains", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/matrix/{outputId}": {"get": {"tags": ["matrix"], "summary": "Get one cached matrix output", "parameters": [{"name": "outputId", "in": "path", "required": true, "schema": {"type": "string", "enum": ["out1", "out2", "out3", "out4", "out5", "out6", "out7", "out8"]}}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/matrix/route": {"post": {"tags": ["matrix"], "summary": "Set complete output route mask", "description": "Body: output plus either input for one source or inputs as an array of zero to four sources.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/matrix/crosspoint-gain": {"post": {"tags": ["matrix"], "summary": "Set matrix crosspoint gain", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
+    "/api/v1/matrix": {"get": {"tags": ["matrix"], "summary": "Get all cached matrix routes and crosspoint gains", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/matrix/{outputId}": {"get": {"tags": ["matrix"], "summary": "Get one cached matrix output", "parameters": [{"name": "outputId", "in": "path", "required": true, "schema": {"type": "string", "enum": ["out1", "out2", "out3", "out4", "out5", "out6", "out7", "out8"]}}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/matrix/route": {"post": {"tags": ["matrix"], "summary": "Set complete output route mask", "description": "Body: output plus either input for one source or inputs as an array of zero to four sources.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/matrix/crosspoint-gain": {"post": {"tags": ["matrix"], "summary": "Set matrix crosspoint gain", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
     "/api/v1/fir/mode": {"post": {"tags": ["fir"], "summary": "FIR408 only: set output processing mode iir or fir", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/fir/generator": {"post": {"tags": ["fir"], "summary": "FIR408 only: set generated FIR filter", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/fir/upload": {"post": {"tags": ["fir"], "summary": "FIR408 only: upload external FIR coefficients", "description": "Body: channel, name, coefficients array or whitespace/comma-separated string.", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxListResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
     "/api/v1/channels/{channelId}/compressor": {
-      "get": {"tags": ["dynamics"], "summary": "Get cached FIR408 input compressor state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}},
+      "get": {"tags": ["dynamics"], "summary": "Get cached FIR408 input compressor state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}},
       "post": {"tags": ["dynamics"], "summary": "Set FIR408 input compressor", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}
     },
     "/api/v1/channels/{channelId}/limiter": {
-      "get": {"tags": ["dynamics"], "summary": "Get cached output limiter state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}},
+      "get": {"tags": ["dynamics"], "summary": "Get cached output limiter state", "parameters": [{"$ref": "#/components/parameters/channelId"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}},
       "post": {"tags": ["dynamics"], "summary": "Set output limiter", "description": "While Auto-Limit is active the request body must include its leaseToken.", "parameters": [{"$ref": "#/components/parameters/channelId"}], "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "409": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}
     },
-    "/api/v1/test-tone/source": {"post": {"tags": ["test-tone"], "summary": "Set test tone source", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/test-tone/sine": {"post": {"tags": ["test-tone"], "summary": "Set test tone sine frequency by hz or raw selector", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/test-tone/off": {"post": {"tags": ["test-tone"], "summary": "Disable test tone", "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/meters": {"get": {"tags": ["meters"], "summary": "Get cached runtime meters", "responses": {"200": {"$ref": "#/components/responses/MeterStateResponse"}}}},
+    "/api/v1/test-tone/source": {"post": {"tags": ["test-tone"], "summary": "Set test tone source", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/test-tone/sine": {"post": {"tags": ["test-tone"], "summary": "Set test tone sine frequency by hz or raw selector", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/test-tone/off": {"post": {"tags": ["test-tone"], "summary": "Disable test tone", "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/meters": {"get": {"tags": ["meters"], "summary": "Get cached runtime meters", "responses": {"200": {"$ref": "#/components/responses/MeterStateResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
     "/api/v1/meters/read": {"post": {"tags": ["meters"], "summary": "Legacy cache-only meter endpoint", "description": "The server-owned central poller is the only component that requests fresh DSP meter frames.", "responses": {"200": {"$ref": "#/components/responses/StateDtoResponse"}, "409": {"description": "DSP is disconnected; cached meters remain available through GET /meters.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Object"}, "example": {"error": "dsp_not_connected", "message": "DSP main is not connected.", "status": 409}}}}}}},
-    "/api/v1/blocks": {"get": {"tags": ["blocks"], "summary": "List cached block indices", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/blocks/{blockIndex}": {"get": {"tags": ["blocks"], "summary": "Get cached block", "parameters": [{"$ref": "#/components/parameters/blockIndex"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/blocks/{blockIndex}/read": {"post": {"tags": ["blocks"], "summary": "Read one block", "parameters": [{"$ref": "#/components/parameters/blockIndex"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/blocks/scan": {"post": {"tags": ["blocks"], "summary": "Synchronize the complete settings cache", "description": "Stops meter polling, obtains a fresh response for every expected DSP parameter block, decodes the dump, then resumes meter polling.", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/scanblocks": {"post": {"tags": ["blocks"], "summary": "Alias for scan", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/refresh": {"post": {"tags": ["blocks"], "summary": "Alias for scan", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/raw": {"post": {"tags": ["debug"], "summary": "Send raw DSP payload", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/volume": {"get": {"tags": ["volume"], "summary": "Volume status", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/volume/status": {"get": {"tags": ["volume"], "summary": "Volume status alias", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/volume/help": {"get": {"tags": ["volume"], "summary": "Volume help", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}}}},
-    "/api/v1/volume/up": {"post": {"tags": ["volume"], "summary": "Volume up", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/volume/down": {"post": {"tags": ["volume"], "summary": "Volume down", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/volume/mute": {"post": {"tags": ["volume"], "summary": "Volume mute", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/volume/unmute": {"post": {"tags": ["volume"], "summary": "Volume unmute", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/volume/refresh": {"post": {"tags": ["volume"], "summary": "Volume refresh", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/volume/set": {"post": {"tags": ["volume"], "summary": "Set grouped input volume", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}},
-    "/api/v1/volume/step": {"post": {"tags": ["volume"], "summary": "Step grouped input volume", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}}}}
+    "/api/v1/blocks": {"get": {"tags": ["blocks"], "summary": "List cached block indices", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/blocks/{blockIndex}": {"get": {"tags": ["blocks"], "summary": "Get cached block", "parameters": [{"$ref": "#/components/parameters/blockIndex"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/blocks/{blockIndex}/read": {"post": {"tags": ["blocks"], "summary": "Read one block", "parameters": [{"$ref": "#/components/parameters/blockIndex"}], "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/blocks/scan": {"post": {"tags": ["blocks"], "summary": "Synchronize the complete settings cache", "description": "Stops meter polling, obtains a fresh response for every expected DSP parameter block, decodes the dump, then resumes meter polling.", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/scanblocks": {"post": {"tags": ["blocks"], "summary": "Alias for scan", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/refresh": {"post": {"tags": ["blocks"], "summary": "Alias for scan", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/raw": {"post": {"tags": ["debug"], "summary": "Send raw DSP payload", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/RawTxResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume": {"get": {"tags": ["volume"], "summary": "Volume status", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume/status": {"get": {"tags": ["volume"], "summary": "Volume status alias", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume/help": {"get": {"tags": ["volume"], "summary": "Volume help", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume/up": {"post": {"tags": ["volume"], "summary": "Volume up", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume/down": {"post": {"tags": ["volume"], "summary": "Volume down", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume/mute": {"post": {"tags": ["volume"], "summary": "Volume mute", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume/unmute": {"post": {"tags": ["volume"], "summary": "Volume unmute", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume/refresh": {"post": {"tags": ["volume"], "summary": "Volume refresh", "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume/set": {"post": {"tags": ["volume"], "summary": "Set grouped input volume", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/volume/step": {"post": {"tags": ["volume"], "summary": "Step grouped input volume", "requestBody": {"$ref": "#/components/requestBodies/ObjectBody"}, "responses": {"200": {"$ref": "#/components/responses/ObjectResponse"}, "503": {"$ref": "#/components/responses/DspOverloadedResponse"}, "409": {"$ref": "#/components/responses/ManagedTargetRequiredResponse"}}}},
+    "/api/v1/devices": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "List persistent device definitions and registry mode",
+        "responses": {
+          "200": {
+            "description": "Device definitions; this does not initiate a device connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DspDeviceRegistryDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Persist a device definition",
+        "description": "An identical normalized definition is an idempotent registration retry. Conflicting IDs or normalized endpoints return 409. Explicit browser Origin must match the directly served server origin. No connection starts unless autoConnect=true.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DspDeviceRegistrationRequest"
+              },
+              "example": {
+                "id": "room2",
+                "host": "dsp.local"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new device definition was persisted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DspDeviceRegistrationDto"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An identical existing definition was returned with created=false.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DspDeviceRegistrationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/DeviceRegistryInvalidJsonResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/BrowserOriginResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/DeviceRegistryConflictResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/DeviceRegistryInvalidInputResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/DeviceRegistryStorageResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "description": "Registered device ID."
+        }
+      ],
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Inspect a registered device definition",
+        "responses": {
+          "200": {
+            "description": "The immutable registered definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DspDeviceDefinitionDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/DeviceNotFoundResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/DeviceRegistryInvalidInputResponse"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Persist device removal and close its runtime resources",
+        "description": "An explicit browser Origin must match the directly served server origin. Unknown IDs return 404. A removed runtime cannot be reused to operate on a replacement with the same ID.",
+        "responses": {
+          "204": {
+            "description": "Device removed; no response body."
+          },
+          "403": {
+            "$ref": "#/components/responses/BrowserOriginResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/DeviceNotFoundResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/DeviceRegistryConflictResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/DeviceRegistryInvalidInputResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/DeviceRegistryStorageResponse"
+          }
+        }
+      }
+    }
   },
   "components": {
     "parameters": {
@@ -285,7 +437,7 @@
         "name": "Idempotency-Key",
         "in": "header",
         "required": false,
-        "description": "Process-local duplicate delivery protection. Same key/body/target reuses the result or exception. Up to 4096 entries; completed entries expire after two minutes, active entries do not expire. Restart ends protection. Changed body/target conflicts.",
+        "description": "Process-local duplicate delivery protection. Same key/body/ID/concrete service identity reuses the result or exception. Replacing a device with the same ID conflicts with the old key; it cannot replay an old ACK or execute on the replacement. Up to 4096 entries; completed entries expire after two minutes, active entries do not expire. Restart ends protection. Changed body/target conflicts.",
         "schema": {
           "type": "string",
           "minLength": 16,
@@ -731,6 +883,111 @@
         "content": {
           "application/json": {
             "schema": {"$ref": "#/components/schemas/JsonPresetApplyResult"}
+          }
+        }
+      },
+      "DeviceNotFoundResponse": {
+        "description": "The selected device ID is unknown or was removed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterHttpError"
+            },
+            "example": {
+              "error": "not_found",
+              "message": "The selected device ID is unknown or was removed.",
+              "status": 404
+            }
+          }
+        }
+      },
+      "ManagedTargetRequiredResponse": {
+        "description": "Managed registry mode requires selecting a device through /dsps/{dspId}.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterHttpError"
+            },
+            "example": {
+              "error": "conflict",
+              "message": "Managed registry mode requires selecting a device through /dsps/{dspId}.",
+              "status": 409
+            }
+          }
+        }
+      },
+      "DeviceRegistryConflictResponse": {
+        "description": "The ID or normalized endpoint conflicts with an existing definition, or managed registration is unavailable. Remove the old definition before retargeting.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterHttpError"
+            },
+            "example": {
+              "error": "conflict",
+              "message": "The ID or normalized endpoint conflicts with an existing definition, or managed registration is unavailable. Remove the old definition before retargeting.",
+              "status": 409
+            }
+          }
+        }
+      },
+      "DeviceRegistryStorageResponse": {
+        "description": "Registry persistence failed; the mutation was not acknowledged as successful.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterHttpError"
+            },
+            "example": {
+              "error": "internal_error",
+              "message": "Registry persistence failed; the mutation was not acknowledged as successful.",
+              "status": 500
+            }
+          }
+        }
+      },
+      "DeviceRegistryInvalidInputResponse": {
+        "description": "The definition must be an object with only id, host, port, library and autoConnect. Values must have their documented JSON types and valid ranges.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterHttpError"
+            },
+            "example": {
+              "error": "unprocessable_entity",
+              "message": "The definition must be an object with only id, host, port, library and autoConnect. Values must have their documented JSON types and valid ranges.",
+              "status": 422
+            }
+          }
+        }
+      },
+      "DeviceRegistryInvalidJsonResponse": {
+        "description": "Request body is malformed JSON, contains duplicate fields or has trailing JSON values.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterHttpError"
+            },
+            "example": {
+              "error": "invalid_json",
+              "message": "Request body is malformed JSON, contains duplicate fields or has trailing JSON values.",
+              "status": 400
+            }
+          }
+        }
+      },
+      "BrowserOriginResponse": {
+        "description": "Browser writes must come from the DSP server origin. Native clients without an Origin header are supported.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParameterHttpError"
+            },
+            "example": {
+              "error": "cross_origin_request",
+              "message": "Browser writes must come from the DSP server origin. Native clients without an Origin header are supported.",
+              "status": 403
+            }
           }
         }
       }
@@ -1501,6 +1758,130 @@
           "frameHex": {"type": "string"},
           "payloadLength": {"type": "integer"},
           "frameLength": {"type": "integer"}
+        }
+      },
+      "DspDeviceDefinitionDto": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "host",
+          "port",
+          "library",
+          "autoConnect"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$",
+            "description": "Normalized lowercase ID. IDs are trimmed and lowercased before validation."
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "description": "DNS name, IPv4 or IPv6 literal, validated without DNS lookup. URLs, paths, controls and whitespace are rejected. IPv6 is stored without brackets."
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "library": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "fir408",
+              "dsp408"
+            ]
+          },
+          "autoConnect": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DspDeviceRegistrationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "host"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Normalized lowercase ID. IDs are trimmed and lowercased before validation."
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "description": "DNS name, IPv4 or IPv6 literal, validated without DNS lookup. URLs, paths, controls and whitespace are rejected. IPv6 is stored without brackets."
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 9761
+          },
+          "library": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "fir408",
+              "dsp408"
+            ],
+            "default": "auto"
+          },
+          "autoConnect": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "description": "Strict JSON types; omitted port=9761, library=auto, autoConnect=false. Explicit null fields are invalid. Definition registration does not connect unless autoConnect=true. Definitions are immutable: remove and re-register to change an endpoint."
+      },
+      "DspDeviceRegistryDto": {
+        "type": "object",
+        "required": [
+          "mode",
+          "persistent",
+          "devices"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "managed",
+              "static",
+              "unavailable"
+            ]
+          },
+          "persistent": {
+            "type": "boolean"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DspDeviceDefinitionDto"
+            }
+          }
+        }
+      },
+      "DspDeviceRegistrationDto": {
+        "type": "object",
+        "required": [
+          "device",
+          "created"
+        ],
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/DspDeviceDefinitionDto"
+          },
+          "created": {
+            "type": "boolean"
+          }
         }
       }
     }

@@ -11,7 +11,11 @@ OSGi Declarative Services runtime implementation of `DspService`.
 
 ## Purpose
 
-This bundle wires `dsp408-api` to `dsp408-core`. It owns the default `DspController` and can manage additional named DSP controllers from configuration. The default controller is exposed through the existing single-DSP API; additional controllers are selected through `DspService.forDsp(id)`.
+This bundle wires `dsp408-api` to `dsp408-core`. In managed mode it starts with
+zero DSPs and persists API-managed device definitions, with one isolated runtime
+per registered ID. Static compatibility mode owns a default `DspController` and
+additional configured controllers. Select concrete targets with `DspService.forDsp(id)`.
+See [headless server](../../docs/HEADLESS-SERVER.md) for the managed API and storage contract.
 
 ## Main Classes
 
@@ -28,6 +32,8 @@ This bundle wires `dsp408-api` to `dsp408-core`. It owns the default `DspControl
 
 ## Configuration Properties
 
+- `registry.mode` - `static` (compatibility default) or `managed` (persistent API registry, no implicit target).
+- `registry.file` - managed registry JSON path; empty uses OSGi bundle data. Set an external persistent path for deployments.
 - `dsp.id` - default DSP id, default `main`.
 - `dsp.ip` - default DSP IPv4 address, default `192.168.0.166`.
 - `dsp.port` - default DSP TCP port, default `9761`.
@@ -49,7 +55,8 @@ The Java configuration methods use underscores, for example `dsp_id()`. In Karaf
 
 ## Multi-DSP
 
-The old API methods target the default DSP. Use `getDspInstances()` to list configured devices and `forDsp("id")` to target a specific one.
+In static mode, the old API methods target the default DSP. In managed mode,
+use the device registry API and select an explicit ID; there is no default DSP. Use `getDspInstances()` to list configured devices and `forDsp("id")` to target a specific one.
 
 Example configuration:
 

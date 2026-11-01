@@ -33,6 +33,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.drremote.dsp408.api.DspService;
+import de.drremote.dsp408.api.DspDeviceNotFoundException;
 import de.drremote.dsp408.api.StateDto;
 
 class DspApiServletPostContractTest {
@@ -99,6 +100,25 @@ class DspApiServletPostContractTest {
         assertEquals(0, response.json().get("completedOperationCount").asInt());
         assertFalse(response.json().get("allChannelsEmergencyMuted").asBoolean());
         assertTrue(fixture.target.connected);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"removed", "replaced"})
+    void presetFailureKeepsOriginalContextWhenTargetChangesDuringApply(String mutation) throws Exception {
+        Fixture fixture = new Fixture("/dsps/room2/preset/apply");
+        fixture.target.failure = new IOException("Target was removed during a preset operation.");
+        RecordingDsp replacement = new RecordingDsp("room2");
+        fixture.target.beforeFailure = () -> fixture.root.selected = mutation.equals("removed") ? null : replacement;
+
+        Response response = org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                () -> fixture.post("/dsps/room2/preset/apply", minimalPreset(), Map.of()));
+
+        assertEquals(500, response.status);
+        assertEquals("preset_apply_failed", response.json().path("error").asText());
+        assertEquals("room2", response.json().path("dspId").asText());
+        assertTrue(response.json().path("emergencyMuteAttempted").asBoolean());
+        assertEquals(1, fixture.root.selections, "A failure must retain the originally resolved target.");
+        assertTrue(replacement.calls.isEmpty());
     }
 
     private static void assertOverloaded(Response response) throws Exception {
@@ -271,6 +291,8 @@ class DspApiServletPostContractTest {
         boolean connected = true;
         boolean disconnectDuringRequest;
         Exception failure;
+        Runnable beforeFailure;
+        int selections;
 
         RecordingDsp(String id) {
             this.id = id;
@@ -283,6 +305,8 @@ class DspApiServletPostContractTest {
                 case "isConnected" -> connected;
                 case "forDsp" -> {
                     assertEquals("room2", args[0]);
+                    selections++;
+                    if (selected == null) throw new DspDeviceNotFoundException("Removed target.");
                     yield selected.service;
                 }
                 case "requestRuntimeMeters", "setDelayUnit", "scanBlocks", "mute", "unmute",
@@ -294,6 +318,7 @@ class DspApiServletPostContractTest {
                         connected = false;
                     }
                     if (failure != null) {
+                        if (beforeFailure != null) beforeFailure.run();
                         throw failure;
                     }
                     yield method.getName().equals("requestRuntimeMeters")

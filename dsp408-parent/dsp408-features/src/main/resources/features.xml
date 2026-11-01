@@ -28,10 +28,26 @@
         <bundle>mvn:de.drremote/dsp408-http/${project.version}</bundle>
     </feature>
 
+    <!-- Fresh API-only managed installation. Existing operator configuration wins. -->
+    <feature name="dsp408-server" version="${project.version}">
+        <config name="de.drremote.dsp408controller">
+            registry.mode=managed
+            auto.connect=false
+        </config>
+        <feature>dsp408-http</feature>
+    </feature>
+
+    <feature name="dsp408-web" version="${project.version}">
+        <config name="de.drremote.dsp408.web">
+            enabled=true
+        </config>
+        <feature>dsp408-http</feature>
+    </feature>
+
     <feature name="dsp408-all" version="${project.version}">
         <feature>dsp408-runtime</feature>
         <feature>dsp408-shell</feature>
         <feature>dsp408-matrix</feature>
-        <feature>dsp408-http</feature>
+        <feature>dsp408-web</feature>
     </feature>
 </features>

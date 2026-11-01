@@ -98,6 +98,12 @@ class DspRuntimeSettingsTest {
             String[] additionalDsps) implements Dsp408Configuration {
 
         @Override
+        public String registry_mode() { return "static"; }
+
+        @Override
+        public String registry_file() { return ""; }
+
+        @Override
         public String dsp_id() {
             return id;
         }

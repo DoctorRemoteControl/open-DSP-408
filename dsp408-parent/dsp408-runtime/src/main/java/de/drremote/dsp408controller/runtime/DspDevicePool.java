@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import de.drremote.dsp408.api.DspInstanceDto;
+import de.drremote.dsp408.api.DspDeviceDefinitionDto;
 import de.drremote.dsp408.api.DspService;
 
 /**
@@ -159,6 +160,13 @@ final class DspDevicePool implements AutoCloseable {
     record DspDefinition(String id, String ip, int port) {
     }
 
+    static Dsp408Configuration childConfiguration(DspDeviceDefinitionDto definition,
+            Dsp408Configuration template, boolean autoConnect) {
+        return new StaticDsp408Configuration(definition.id(), definition.host(), definition.port(),
+                definition.library(), autoConnect, template.auto_read_on_connect(),
+                template.meter_poll_interval_ms(), template.volume_step_db(), new String[0]);
+    }
+
     private record StaticDsp408Configuration(
             String dspId,
             String dspIp,
@@ -170,6 +178,12 @@ final class DspDevicePool implements AutoCloseable {
             double volumeStepDb,
             String[] dsps
     ) implements Dsp408Configuration {
+        @Override
+        public String registry_mode() { return "static"; }
+
+        @Override
+        public String registry_file() { return ""; }
+
         @Override
         public String dsp_id() {
             return dspId;

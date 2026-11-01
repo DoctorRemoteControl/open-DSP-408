@@ -249,7 +249,7 @@ final class DspConnectionManager implements AutoCloseable {
         }
     }
 
-    private static String await(CompletableFuture<String> result) throws Exception {
+    static String await(CompletableFuture<String> result) throws Exception {
         try {
             return result.get();
         } catch (InterruptedException error) {
