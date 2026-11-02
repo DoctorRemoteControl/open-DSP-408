@@ -6,13 +6,18 @@ import {fixture} from './fixture.mjs';
 let browser;const profiles=[];
 before(async()=>{browser=await chromium.launch({headless:true,...(process.env.DSP408_BROWSER_BIN?{executablePath:process.env.DSP408_BROWSER_BIN}:{}),args:['--no-sandbox']});});
 after(async()=>{await browser?.close();if(process.env.DSP408_BROWSER_EVIDENCE_DIR){await mkdir(process.env.DSP408_BROWSER_EVIDENCE_DIR,{recursive:true});await writeFile(process.env.DSP408_BROWSER_EVIDENCE_DIR+'/network-profiles.json',JSON.stringify(profiles,null,2));}});
-async function visit(run,{width=1366,height=1000}={}) {
+async function visit(run,{width=1366,height=1000,setup,ready=true}={}) {
  const api=await fixture();const context=await browser.newContext({viewport:{width,height},reducedMotion:'reduce',hasTouch:width<600,isMobile:width<600});const page=await context.newPage();
+ if(setup)setup(api);
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  try {
-  await page.goto(api.url+'/app/');await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-slider')?.disabled===false);
+  await page.goto(api.url+'/app/');if(ready)await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-slider')?.disabled===false);
   await run(page,api);assert.deepEqual(errors,[],'No uncaught JavaScript errors');
  } finally {await context.close();await api.close();}
+}
+async function until(predicate) {
+ for(let attempt=0;attempt<200;attempt++){if(predicate())return;await new Promise(r=>setTimeout(r,10));}
+ assert.fail('The fixture did not reach the expected HTTP processing point.');
 }
 const card=id=>`[data-channel="${id}"]`;
 async function gain(page,id,value,event='change') {
@@ -150,4 +155,111 @@ test('a 30-second preflight stall times out before any control command is submit
  await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('timed out'));
  const feedbackMs=performance.now()-started;assert.ok(feedbackMs<3500);assert.equal(api.operations.length,0);assert.equal(api.posts().length,0);
  profiles.push({scenario:'HTTP preflight held30000ms',feedbackMs,logicalWrites:0,outcome:'Not submitted; controls paused'});
+}));
+
+
+test('live stream pushes controls and meters without repeated snapshot or meter GETs',async()=>visit(async(page,api)=>{
+ await page.waitForFunction(()=>document.querySelector('#live-status')?.textContent.includes('Live updates'));
+ const reads=api.requests.filter(r=>r.method==='GET'&&/control-state|capabilities|channels|settings-cache|meters/.test(r.path)).length;
+ api.devices.main.channels[11].gainDb=-8;api.meterLevel=-30;
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-value').textContent.includes('−8.0'));
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .meter-number').textContent.includes('−19.0'));
+ assert.equal(api.streams.size,1);assert.equal(api.requests.filter(r=>r.method==='GET'&&/control-state|capabilities|channels|settings-cache|meters/.test(r.path)).length,reads);
+}));
+test('stream loss pauses controls and reconnects with fresh state without replaying a command',async()=>visit(async(page,api)=>{
+ api.suppressEvents=true;api.dropStreams();
+ await page.waitForFunction(()=>document.querySelector('#live-status')?.textContent.includes('Reconnecting'));
+ assert.ok(await page.locator(card('out8')+' .gain-slider').isDisabled());
+ assert.match(await page.locator(card('out8')+' .meter-state').textContent(),/stale/);
+ api.devices.main.channels[11].gainDb=-9;api.suppressEvents=false;
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-value').textContent.includes('−9.0')&&!document.querySelector('[data-channel="out8"] .gain-slider').disabled);
+ assert.equal(api.posts().length,0);assert.equal(api.streams.size,1);
+}));
+test('hidden pages release the stream and reopen one current binding on return',async()=>visit(async(page,api)=>{
+ await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});
+ await new Promise(r=>setTimeout(r,200));assert.equal(api.streams.size,0);
+ api.devices.main.channels[11].gainDb=-10;
+ await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});document.dispatchEvent(new Event('visibilitychange'));});
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-value').textContent.includes('−10.0')&&!document.querySelector('[data-channel="out8"] .gain-slider').disabled);
+ assert.equal(api.streams.size,1);assert.equal(api.posts().length,0);
+}));
+test('unsupported SSE uses the existing polling compatibility path',async()=>visit(async(page,api)=>{
+ await page.waitForFunction(()=>document.querySelector('#live-status')?.textContent.includes('Polling compatibility'));
+ api.devices.main.channels[11].gainDb=-11;
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-value').textContent.includes('−11.0'));
+ assert.equal(api.streams.size,0);assert.ok(api.requests.some(r=>r.path.endsWith('/meters')));
+},{setup:api=>{api.sseUnsupported=true;api.controlStateUnsupported=true;}}));
+test('late older push and late ACK cannot overwrite newer state',async()=>visit(async(page,api)=>{
+ api.replyDelayMs=800;await gain(page,'out8',-12);
+ await until(()=>api.operations.length===1);
+ api.devices.main.channels[11].gainDb=-2;
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-value').textContent.includes('−2.0'));
+ await waitOutcome(page);assert.match(await page.locator(card('out8')+' .gain-value').textContent(),/−2.0/);
+ api.suppressEvents=true;
+ api.push('state',{dspId:'main',instanceId:'fixture-main-1',revision:0,connected:true,channels:[],capabilities:{connected:true,channels:[]},settingsCache:{phase:'READY',ready:true}});
+ await new Promise(r=>setTimeout(r,150));assert.match(await page.locator(card('out8')+' .gain-value').textContent(),/−2.0/);
+}));
+test('same-ID replacement clears an old draft and never sends it to the replacement',async()=>visit(async(page,api)=>{
+ await gain(page,'out8',-12,'input');
+ api.devices.main={...api.devices.main,instanceId:'fixture-main-2',revision:0,fingerprint:undefined,channels:structuredClone(api.devices.main.channels)};
+ api.devices.main.channels[11].gainDb=-3;
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-value')?.textContent.includes('−3.0'));
+ assert.doesNotMatch(await page.locator(card('out8')+' .gain-evidence').textContent(),/Preview/);assert.equal(api.posts().length,0);
+}));
+test('two browser clients racing one revision produce one write and one unsent conflict',async()=>visit(async(page,api)=>{
+ const other=await page.context().newPage();await other.goto(api.url+'/app/');await other.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-slider')?.disabled===false);
+ let release;api.writeGate=new Promise(r=>{release=r;});
+ await Promise.all([gain(page,'out8',-12),gain(other,'out8',-9)]);
+ await until(()=>api.posts().length===2);release();
+ await page.waitForFunction(()=>!document.querySelector('[data-channel="out8"] .gain-slider').disabled);
+ await other.waitForFunction(()=>!document.querySelector('[data-channel="out8"] .gain-slider').disabled);
+ assert.equal(api.operations.length,1);assert.equal(api.posts().length,2);
+ const messages=(await page.locator('#notice').textContent())+' '+(await other.locator('#notice').textContent());assert.match(messages,/not sent/);assert.doesNotMatch(messages,/uncertain/);
+ await other.close();
+}));
+test('rapid slider releases stay bounded and never form a delayed command queue',async()=>visit(async(page,api)=>{
+ api.backendDelayMs=300;
+ for(let n=0;n<25;n++)await gain(page,'out8',-12+n/10);
+ await new Promise(r=>setTimeout(r,650));assert.equal(api.operations.length,1);assert.equal(api.posts().length,1);
+}));
+
+
+test('empty selection keeps one devices-only stream and adopts an added processor',async()=>visit(async(page,api)=>{
+ await page.waitForFunction(()=>document.querySelector('#live-status').textContent.includes('Live updates'));
+ await new Promise(r=>setTimeout(r,350));assert.equal(api.streams.size,1);
+ assert.equal(api.requests.filter(r=>r.path==='/api/v1/events').length,1);
+ api.devices.main=api.savedDevice;
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-slider')?.disabled===false);
+ assert.equal(api.streams.size,1);assert.equal(api.posts().length,0);
+},{ready:false,setup:api=>{api.savedDevice=api.devices.main;api.devices={};}}));
+test('replacement while cached preflight is pending cannot send the old draft',async()=>visit(async(page,api)=>{
+ api.channelDelayMs=500;await gain(page,'out8',-12);
+ api.devices.main={...api.devices.main,instanceId:'fixture-main-2',revision:0,fingerprint:undefined,channels:structuredClone(api.devices.main.channels)};
+ api.devices.main.channels[11].gainDb=-3;
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-value')?.textContent.includes('−3.0'));
+ await new Promise(r=>setTimeout(r,650));assert.equal(api.posts().length,0);assert.equal(api.operations.length,0);
+}));
+test('pushed READY cache cannot erase an uncertain command outcome',async()=>visit(async(page,api)=>{
+ api.writeMode='lost';await gain(page,'out8',-12);
+ await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('uncertain'));
+ api.devices.main.cache='READY';api.devices.main.channels[11].gainDb=-4;
+ await page.waitForFunction(()=>document.querySelector('[data-channel="out8"] .gain-value').textContent.includes('−4.0'));
+ assert.ok(await page.locator(card('out8')+' .gain-slider').isDisabled());assert.match(await page.locator('#notice').textContent(),/uncertain/);assert.equal(api.operations.length,1);
+}));
+
+test('a new conflict supersedes the previous ACK in channel feedback',async()=>visit(async(page,api)=>{
+ await gain(page,'out8',-12);await waitOutcome(page);
+ await page.waitForFunction(()=>!document.querySelector('[data-channel="out8"] .gain-slider').disabled);
+ await gain(page,'out8',-11,'input');api.devices.main.channels[11].gainDb=-3;
+ await gain(page,'out8',-11);
+ await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('changed elsewhere'));
+ assert.match(await page.locator(card('out8')+' .card-feedback').textContent(),/conflict/i);assert.equal(api.operations.length,1);
+}));
+
+test('a processor deleted while hidden is replaced by a current selection on return',async()=>visit(async(page,api)=>{
+ await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});
+ delete api.devices.main;
+ await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});document.dispatchEvent(new Event('visibilitychange'));});
+ await page.waitForFunction(()=>document.querySelector('#device-select').value==='second'&&document.querySelector('[data-channel="out8"] .gain-slider')?.disabled===false,null,{timeout:4000});
+ assert.match(await page.locator(card('out8')+' .gain-value').textContent(),/−3.0/);assert.equal(api.posts().length,0);assert.equal(api.streams.size,1);
 }));

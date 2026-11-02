@@ -58,6 +58,13 @@ final class DspGetRouteHandler {
             return true;
         }
 
+        if (path.equals("/control-state")) {
+            var state = dsp.getControlState();
+            response.setHeader("ETag", state.etag());
+            responses.writeJson(response, 200, state);
+            return true;
+        }
+
         if (path.equals("/capabilities")) {
             responses.writeJson(response, 200, dsp.getCapabilities());
             return true;

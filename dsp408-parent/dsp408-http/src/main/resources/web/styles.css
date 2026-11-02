@@ -872,3 +872,8 @@ footer {
 
 .footer-timing { margin-left: auto; color: #a7bcaf; overflow-wrap: anywhere; }
 @media (max-width: 520px) { footer { flex-wrap: wrap; } .footer-timing { margin-left: 0; flex-basis: 100%; padding-top: 6px; } }
+
+.live-status { color: var(--muted); font-size: 12px; min-height: 18px; margin: 14px 4px 0; }
+.live-status.live { color: var(--accent); }
+.live-status.reconnecting, .live-status.paused { color: var(--amber); }
+.channel-card:has(.card-feedback.error) { border-color: #75473f; }

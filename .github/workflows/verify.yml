@@ -100,6 +100,13 @@ jobs:
           --archive open-DSP-408/dsp408-parent/dsp408-server/target/dsp408-server-*.tar.gz
           --state-dir "${{ runner.temp }}/dsp408-server-package"
 
+      - name: Verify live streams and coordinated browsers
+        run: >-
+          python3 open-DSP-408/integration/live-control-smoke.py
+          --archive open-DSP-408/dsp408-parent/dsp408-server/target/dsp408-server-*.tar.gz
+          --state-dir "${{ runner.temp }}/dsp408-live-control"
+          --browser-check
+
       - name: Hash server downloads
         working-directory: open-DSP-408/dsp408-parent/dsp408-server/target
         run: sha256sum dsp408-server-*.tar.gz dsp408-server-*.zip > dsp408-server-SHA256SUMS.txt

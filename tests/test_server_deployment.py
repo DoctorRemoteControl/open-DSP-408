@@ -1,5 +1,6 @@
 """Real filesystem and foreground admission tests for the server distribution."""
 import hashlib
+import errno
 import importlib.util
 import json
 import os
@@ -389,6 +390,77 @@ class DeploymentTests(unittest.TestCase):
 
     def test_interrupted_rollback_can_be_retried(self):
         self.interrupted_selection('rollback')
+
+    def test_optional_web_setting_drives_http_component_without_changing_state(self):
+        self.installed()
+        settings = self.state / 'config/server.json'
+        value = json.loads(settings.read_text())
+        value['webEnabled'] = True
+        configured = json.dumps(value, indent=2) + '\n'
+        settings.write_text(configured)
+        result = self.run_launch()
+        self.assertEqual(0, result[0], result[2])
+        capture = json.loads((self.root / 'capture.json').read_text())
+        etc = Path(capture['env']['KARAF_ETC'])
+        self.assertEqual('enabled=true\n', (etc / 'de.drremote.dsp408.web.cfg').read_text())
+        self.assertEqual(configured, settings.read_text())
+
+    def test_web_setting_requires_a_json_boolean_before_startup(self):
+        self.installed()
+        settings = self.state / 'config/server.json'
+        original = json.loads(settings.read_text())
+        for value in ('true', 1, None):
+            with self.subTest(value=value):
+                settings.write_text(json.dumps({**original, 'webEnabled': value}))
+                result = self.run_launch()
+                self.assertNotEqual(0, result[0])
+                self.assertFalse((self.root / 'capture.json').exists())
+
+    def run_module(self):
+        spec = importlib.util.spec_from_file_location('deployment_run_test', TOOLS / 'run.py')
+        module = importlib.util.module_from_spec(spec)
+        previous = sys.dont_write_bytecode
+        try:
+            with patch.dict(sys.modules, common=self.common_module()):
+                spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = previous
+        return module
+
+    def test_launcher_does_not_exec_before_configured_local_address_exists(self):
+        self.installed()
+        settings = self.state / 'config/server.json'
+        value = json.loads(settings.read_text())
+        value['listenAddresses'] = ['127.0.0.1', '192.0.2.123']
+        settings.write_text(json.dumps(value))
+        process = self.launch()
+        try:
+            deadline = time.monotonic() + .3
+            while time.monotonic() < deadline and process.poll() is None:
+                time.sleep(.01)
+            self.assertIsNone(process.poll(), 'Launcher started Karaf before the LAN address existed')
+            self.assertFalse((self.root / 'capture.json').exists())
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=5)
+
+    def test_missing_local_address_recovers_but_permanent_absence_has_a_deadline(self):
+        module = self.run_module()
+        with patch.object(module.socket, 'socket') as sockets, patch.object(module.time, 'sleep'), \
+                patch.object(module.time, 'monotonic', side_effect=[0, .1]):
+            sockets.return_value.__enter__.return_value.bind.side_effect = [
+                OSError(errno.EADDRNOTAVAIL, 'Address not assigned'), None, None]
+            module.wait_for_listeners(['127.0.0.1', '::1'])
+        with patch.object(module.socket, 'socket') as sockets, patch.object(module.time, 'sleep'), \
+                patch.object(module.time, 'monotonic', side_effect=[0, 31]):
+            sockets.return_value.__enter__.return_value.bind.side_effect = OSError(errno.EADDRNOTAVAIL, 'Absent')
+            with self.assertRaisesRegex(module.DeploymentError, '127.0.0.1'):
+                module.wait_for_listeners(['127.0.0.1'])
+        with patch.object(module.socket, 'socket') as sockets:
+            sockets.return_value.__enter__.return_value.bind.side_effect = OSError(errno.EACCES, 'Denied')
+            with self.assertRaises(OSError):
+                module.wait_for_listeners(['127.0.0.1'])
 
     def test_service_output_escapes_paths_and_uses_stable_foreground_entry(self):
         self.install = self.root / 'install % $ space'

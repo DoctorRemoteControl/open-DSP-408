@@ -16,6 +16,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import de.drremote.dsp408.api.CapabilitiesDto;
+import de.drremote.dsp408.api.ControlStateDto;
+import de.drremote.dsp408.api.DspControlConflictException;
 import de.drremote.dsp408.api.ParameterWriteRequestDto;
 import de.drremote.dsp408.api.ParameterWriteResultDto;
 import de.drremote.dsp408.api.ParameterWriteStatus;
@@ -68,7 +70,7 @@ public final class DspRuntimeComponent implements DspService {
     private final DspParameterCapabilities parameterCapabilities = new DspParameterCapabilities(
             controller, this::dspId);
     private final DspParameterWrites parameterWrites = new DspParameterWrites(
-            controller, transactions, this::dspId);
+            controller, transactions, this::dspId, this::recordParameterState);
     private final DspDynamicsCommands dynamics = new DspDynamicsCommands(
             controller,
             dtoMapper,
@@ -139,6 +141,10 @@ public final class DspRuntimeComponent implements DspService {
             controller,
             runtimeSettings::connectionConfig
     );
+
+    private final DspControlState controlState = new DspControlState(
+            this::dspId, this::isConnected, this::getChannels, this::getCapabilities,
+            this::getSettingsCacheStatus);
 
     private final DspDevicePool devicePool;
     private volatile DspManagedDeviceRegistry managedRegistry;
@@ -383,6 +389,12 @@ public final class DspRuntimeComponent implements DspService {
     }
 
     @Override
+    public ControlStateDto getControlState() {
+        requirePhysicalDevice();
+        return controlState.snapshot();
+    }
+
+    @Override
     public ParameterWriteResultDto writeParameter(ParameterWriteRequestDto request) {
         return recordParameterWrite(parameterWrites.write(request));
     }
@@ -392,9 +404,27 @@ public final class DspRuntimeComponent implements DspService {
         return recordParameterWrite(parameterWrites.writeInteractive(request));
     }
 
+    @Override
+    public ParameterWriteResultDto writeParameterConditional(ParameterWriteRequestDto request,
+            String expectedEtag, boolean interactive) {
+        requirePhysicalDevice();
+        java.util.Objects.requireNonNull(expectedEtag, "An expected control state tag is required.");
+        return recordParameterWrite(parameterWrites.writeConditional(request, interactive, () -> {
+            ControlStateDto current = getControlState();
+            if (!current.etag().equals(expectedEtag)) throw new DspControlConflictException(current);
+        }));
+    }
+
     private ParameterWriteResultDto recordParameterWrite(ParameterWriteResultDto result) {
+        // Auto-Limit may hold its monitor while entering a transaction. Keep
+        // undo invalidation outside admission to preserve that lock order.
+        if (result.status() != ParameterWriteStatus.REJECTED) autoLimit.invalidateUndo();
+        return result;
+    }
+
+    private ParameterWriteResultDto recordParameterState(ParameterWriteResultDto result) {
         if (result.status() != ParameterWriteStatus.REJECTED) {
-            autoLimit.invalidateUndo();
+            controlState.consumeRevision();
             if (controller.isConnected()) {
                 // Verification covers one parameter, not every raw block in the
                 // complete settings snapshot or possible linked-device effects.

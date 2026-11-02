@@ -29,6 +29,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.drremote.dsp408.api.DspService;
+import de.drremote.dsp408.api.ControlStateDto;
+import de.drremote.dsp408.api.DspControlConflictException;
+import de.drremote.dsp408.api.SettingsCacheDto;
 import de.drremote.dsp408.api.ParameterWriteRequestDto;
 import de.drremote.dsp408.api.ParameterWriteResultDto;
 import de.drremote.dsp408.api.ParameterWriteStatus;
@@ -210,6 +213,74 @@ class DspParameterPostHandlerDeliveryTest {
         }
     }
 
+    @Test
+    void staleConditionIs412DefinitelyUnsentAndIncludesFreshState() throws Exception {
+        Fixture fixture = new Fixture();
+        Response response = fixture.post("", BODY, KEY, "wait=0", "\"runtime.99\"");
+        assertEquals(412, response.status);
+        assertEquals("conflict", response.json().path("error").asText());
+        assertEquals("revision_conflict", response.json().path("errorCode").asText());
+        assertFalse(response.json().path("transmitted").asBoolean(true));
+        assertEquals("runtime", response.json().at("/current/instanceId").asText());
+        assertEquals(0, response.json().at("/current/revision").asLong());
+        assertEquals(5, response.json().size());
+        assertEquals(0, fixture.writes.get());
+        assertEquals(1, fixture.conditionalAttempts.get());
+    }
+
+    @Test
+    void conditionalRetryReplaysAckBeforeReevaluatingItsNowStaleCondition() throws Exception {
+        Fixture fixture = new Fixture();
+        Response first = fixture.post("", BODY, KEY, "wait=0", "\"runtime.0\"");
+        Response retry = fixture.post("", BODY, KEY, null, "\"runtime.0\"");
+        assertEquals(200, first.status);
+        assertEquals(first.json(), retry.json());
+        assertEquals(1, fixture.writes.get());
+        assertEquals(1, fixture.conditionalAttempts.get());
+        assertEquals(1, fixture.interactiveWrites.get());
+        assertEquals(0, fixture.normalWrites.get());
+    }
+
+    @Test
+    void changingTheConditionWithTheSameKeyConflictsBeforeAnotherAttempt() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.post("", BODY, KEY, null, "\"runtime.0\"");
+        assertEquals(409, fixture.post("", BODY, KEY, null, "\"runtime.1\"").status);
+        assertEquals(409, fixture.post("", BODY, KEY, null, null).status);
+        assertEquals(1, fixture.conditionalAttempts.get());
+        assertEquals(1, fixture.writes.get());
+    }
+
+    @Test
+    void retryCannotRetargetAReplacementRuntimeWithTheSameDspId() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.post("", BODY, KEY, null, "\"runtime.0\"");
+        fixture.instanceId = "replacement";
+        assertEquals(409, fixture.post("", BODY, KEY, null, "\"runtime.0\"").status);
+        assertEquals(1, fixture.conditionalAttempts.get());
+        assertEquals(1, fixture.writes.get());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "runtime.0", "W/\"runtime.0\"", "*", "\"runtime.0\", \"other.1\"", "\"bad\nvalue\""})
+    void invalidIfMatchRejectsBeforeAnyAttempt(String condition) throws Exception {
+        Fixture fixture = new Fixture();
+        assertEquals(422, fixture.post("", BODY, KEY, null, condition).status);
+        assertEquals(0, fixture.writes.get());
+        assertEquals(0, fixture.conditionalAttempts.get());
+    }
+
+    @Test
+    void controlStateReturnsTheSnapshotWithAStrongEtag() throws Exception {
+        Fixture fixture = new Fixture();
+        Response response = new Response();
+        fixture.servlet.doGet(request("/control-state", "", null, null, null), response.proxy);
+        assertEquals(200, response.status);
+        assertEquals("runtime", response.json().path("instanceId").asText());
+        assertEquals("\"runtime.0\"", response.headers.get("ETag"));
+        assertEquals(0, fixture.writes.get());
+    }
+
     private static double backendMilliseconds(Response response) {
         String timing = response.headers.get("Server-Timing");
         assertNotNull(timing);
@@ -220,6 +291,8 @@ class DspParameterPostHandlerDeliveryTest {
     private static final class Fixture {
         final DspApiServlet servlet = new DspApiServlet();
         final AtomicInteger writes = new AtomicInteger();
+        final AtomicInteger conditionalAttempts = new AtomicInteger();
+        String instanceId = "runtime";
         final AtomicInteger normalWrites = new AtomicInteger();
         final AtomicInteger interactiveWrites = new AtomicInteger();
         volatile CountDownLatch entered;
@@ -240,10 +313,20 @@ class DspParameterPostHandlerDeliveryTest {
                         return switch (method.getName()) {
                             case "dspId" -> id;
                             case "forDsp" -> service((String) args[0]);
-                            case "writeParameter", "writeParameterInteractive" -> {
+                            case "getControlState" -> new ControlStateDto(id, instanceId, writes.get(), true,
+                                    java.util.List.of(), null, SettingsCacheDto.empty());
+                            case "writeParameter", "writeParameterInteractive", "writeParameterConditional" -> {
+                                boolean conditional = method.getName().equals("writeParameterConditional");
+                                if (conditional) {
+                                    conditionalAttempts.incrementAndGet();
+                                    var current = new ControlStateDto(id, instanceId, writes.get(), true,
+                                            java.util.List.of(), null, SettingsCacheDto.empty());
+                                    if (!current.etag().equals(args[1])) throw new DspControlConflictException(current);
+                                }
                                 int count = writes.incrementAndGet();
-                                if (method.getName().equals("writeParameter")) normalWrites.incrementAndGet();
-                                else interactiveWrites.incrementAndGet();
+                                if (conditional ? (boolean) args[2] : method.getName().equals("writeParameterInteractive")) {
+                                    interactiveWrites.incrementAndGet();
+                                } else normalWrites.incrementAndGet();
                                 if (entered != null) entered.countDown();
                                 if (release != null && !release.await(5, TimeUnit.SECONDS)) {
                                     throw new AssertionError("Synthetic write was never released.");
@@ -261,13 +344,17 @@ class DspParameterPostHandlerDeliveryTest {
         }
 
         Response post(String prefix, String body, String key, String prefer) throws Exception {
+            return post(prefix, body, key, prefer, null);
+        }
+
+        Response post(String prefix, String body, String key, String prefer, String ifMatch) throws Exception {
             Response response = new Response();
-            servlet.doPost(request(prefix + "/parameters/write", body, key, prefer), response.proxy);
+            servlet.doPost(request(prefix + "/parameters/write", body, key, prefer, ifMatch), response.proxy);
             return response;
         }
     }
 
-    private static HttpServletRequest request(String path, String body, String key, String prefer) {
+    private static HttpServletRequest request(String path, String body, String key, String prefer, String ifMatch) {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         ByteArrayInputStream input = new ByteArrayInputStream(bytes);
         ServletInputStream stream = new ServletInputStream() {
@@ -282,8 +369,11 @@ class DspParameterPostHandlerDeliveryTest {
                     case "getHeader" -> switch ((String) args[0]) {
                         case "Idempotency-Key" -> key;
                         case "Prefer" -> prefer;
+                        case "If-Match" -> ifMatch;
                         default -> null;
                     };
+                    case "getHeaders" -> java.util.Collections.enumeration(ifMatch == null
+                            ? java.util.List.of() : java.util.List.of(ifMatch));
                     case "getContentLengthLong" -> (long) bytes.length;
                     case "getInputStream" -> stream;
                     default -> throw new AssertionError("Unexpected request method: " + method.getName());

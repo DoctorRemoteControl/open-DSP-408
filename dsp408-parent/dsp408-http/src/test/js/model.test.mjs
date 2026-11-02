@@ -12,6 +12,7 @@ function fixture() {
   const api={ async request(path, options={}) {
     calls.push({path,...options});
     if(path==='/api/v1/dsps')return {defaultDsp:'main',dsps:[{id:'main',ip:'127.0.0.1',port:9761}]};
+    if(path.endsWith('/control-state'))throw new ApiError('Unsupported',404);
     if(path.endsWith('/capabilities'))return {dspId:'main',connected:true,firmwareRecognized:true,deviceVersion:'FIR408 V0113P',channels:[{id:'out8',parameters:['gain','mute','phase','delay'].map(capability)}]};
     if(path.endsWith('/channels'))return {connected:true,channels:[clone(channel)]};
     if(path.endsWith('/settings-cache'))return {phase:'READY',ready:true,cachedBlockCount:32};
@@ -216,4 +217,91 @@ test('gain resolution follows capability bands across a shared boundary',async()
  assert.equal(nextGainValue(-20.5,1,cap),-20);assert.equal(nextGainValue(-20,1,cap),-19.9);
  assert.equal(nextGainValue(-19.9,-1,cap),-20);assert.equal(nextGainValue(-20,-1,cap),-20.5);
  assert.equal(nextGainValue(-60,-1,cap),-60);assert.equal(nextGainValue(12,1,cap),12);
+});
+
+function liveFixture() {
+ const f=fixture();const original=f.api.request;
+ f.state={dspId:'main',instanceId:'runtime-a',revision:4,connected:true,channels:[clone(channel)],capabilities:{dspId:'main',connected:true,firmwareRecognized:true,channels:[{id:'out8',parameters:['gain','mute','phase','delay'].map(capability)}]},settingsCache:{phase:'READY',ready:true}};
+ f.api.request=async(path,options={})=>{
+  if(path.endsWith('/control-state')){f.calls.push({path,...options});return clone(f.state);}
+  return original(path,options);
+ };return f;
+}
+test('control snapshots reject older revisions and retired incarnations',async()=>{
+ const f=await ready(liveFixture(),false);
+ assert.equal(f.session.instanceId,'runtime-a');assert.equal(f.session.revision,4);
+ f.session.receiveState({...clone(f.state),revision:8,channels:[{...channel,gainDb:-8}]});
+ f.session.receiveState({...clone(f.state),revision:5,channels:[{...channel,gainDb:-5}]});
+ assert.equal(f.session.channel('out8').gainDb,-8);
+ const generation=f.session.generation;
+ f.session.receiveState({...clone(f.state),instanceId:'runtime-b',revision:0,channels:[{...channel,gainDb:-2}]});
+ assert.ok(f.session.generation>generation);assert.equal(f.session.channel('out8').gainDb,-2);
+ f.session.receiveState({...clone(f.state),revision:99});assert.equal(f.session.instanceId,'runtime-b');
+});
+test('conditional write binds fresh cached state and 412 is a definite unsent conflict',async()=>{
+ const f=await ready(liveFixture(),false),original=f.api.request;
+ f.api.request=async(p,o)=>{
+  if(p.endsWith('/parameters/write')){f.calls.push({path:p,...o});throw new ApiError('Changed elsewhere',412,{error:'conflict',errorCode:'revision_conflict',transmitted:false,current:{...clone(f.state),revision:5,channels:[{...channel,gainDb:-3}]}});}
+  return original(p,o);
+ };
+ await assert.rejects(f.session.write('out8','gain',-12,-6),/changed elsewhere/i);
+ assert.equal(f.calls.at(-1).expectedEtag,'"runtime-a.4"');assert.equal(f.session.uncertain,false);
+ assert.equal(f.session.channel('out8').gainDb,-3);assert.equal(f.session.conflict.parameter,'gain');
+});
+test('a newer pushed state wins over a late ACK and a stale preflight cannot transmit',async()=>{
+ const f=await ready(liveFixture(),false),original=f.api.request,hold=deferred();
+ f.api.request=async(p,o)=>p.endsWith('/parameters/write')?hold.promise:original(p,o);
+ const writing=f.session.write('out8','gain',-12,-6);await new Promise(r=>setImmediate(r));
+ f.session.receiveState({...clone(f.state),revision:6,channels:[{...channel,gainDb:-2}]});
+ hold.resolve(result({channelId:'out8',parameter:'gain',value:-12,verify:false}));await writing;
+ assert.equal(f.session.channel('out8').gainDb,-2);
+ await new Promise(r=>setTimeout(r,170));
+ await assert.rejects(f.session.write('out8','gain',-8,-2),/newer|changed|current/i);
+});
+test('same-ID replacement during preflight invalidates the command binding',async()=>{
+ const f=await ready(liveFixture(),false),original=f.api.request;
+ f.api.request=async(p,o)=>p.endsWith('/control-state')?{...clone(f.state),instanceId:'runtime-b',revision:0}:original(p,o);
+ assert.equal(await f.session.write('out8','gain',-12,-6),null);
+ assert.equal(f.calls.filter(c=>c.method==='POST').length,0);assert.equal(f.session.instanceId,'runtime-b');
+});
+test('obsolete unsupported preflight cannot downgrade the current processor to unconditional writes',async()=>{
+ for(const status of [404,405,501])for(const nextId of ['second','main']) {
+  const f=await ready(liveFixture(),false),original=f.api.request,hold=deferred();let oldPreflight=true;
+  f.api.request=async(p,o={})=>{
+   if(p.endsWith('/control-state')&&oldPreflight){oldPreflight=false;await hold.promise;throw new ApiError('Old processor unavailable',status);}
+   if(p.endsWith('/parameters/write')){f.calls.push({path:p,...o});return {...result(o.body),dspId:nextId};}
+   return original(p,o);
+  };
+  const oldWrite=f.session.write('out8','gain',-12,-6);
+  f.session.receiveDevices({defaultDsp:nextId,dsps:[{id:nextId}]});
+  f.state={...clone(f.state),dspId:nextId,instanceId:'runtime-b',revision:7,
+   capabilities:{...clone(f.state.capabilities),dspId:nextId}};
+  f.session.receiveState(clone(f.state));
+  hold.resolve();assert.equal(await oldWrite,null);
+  await f.session.write('out8','gain',-8,-6);
+  const posted=f.calls.find(c=>c.method==='POST');
+  assert.equal(posted.path,`/api/v1/dsps/${nextId}/parameters/write`);
+  assert.equal(posted.expectedEtag,'"runtime-b.7"');
+  assert.equal(f.session.controlStateSupported,true);
+ }
+});
+test('short outgoing rate limit refuses extra writes without a deferred queue',async()=>{
+ const f=await ready(liveFixture(),false);await f.session.write('out8','gain',-12,-6);
+ await assert.rejects(f.session.write('out8','gain',-10,-12),/busy|wait|progress/i);
+ await new Promise(r=>setTimeout(r,180));assert.equal(f.calls.filter(c=>c.method==='POST').length,1);
+});
+
+test('preflight cannot send after stream loss or freshly revoked firmware capability',async()=>{
+ for(const revoke of [f=>f.session.setStreamStatus('reconnecting'),f=>{f.state.capabilities.firmwareRecognized=false;}]) {
+  const f=await ready(liveFixture(),false),original=f.api.request,hold=deferred();
+  f.api.request=async(p,o)=>p.endsWith('/control-state')?hold.promise:original(p,o);
+  const writing=f.session.write('out8','gain',-12,-6);revoke(f);hold.resolve(clone(f.state));
+  await assert.rejects(writing,/unavailable|paused|firmware|capabilit/i);
+  assert.equal(f.calls.filter(c=>c.method==='POST').length,0);
+ }
+});
+test('HTTP transport passes the exact strong conditional tag unchanged',async()=>{
+ let options;const api=new HttpApi(async(p,o)=>{options=o;return {ok:true,status:200,json:async()=>({})};});
+ await api.request('/parameters/write',{method:'POST',body:{},expectedEtag:'"runtime-a.4"'});
+ assert.equal(options.headers['If-Match'],'"runtime-a.4"');
 });

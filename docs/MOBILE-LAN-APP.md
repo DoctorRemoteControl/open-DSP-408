@@ -65,25 +65,41 @@ blocks further writes until explicit recovery; reconnect if disconnected and
 then Refresh. The app does not automatically resend a write. These client
 limits are not a guarantee that a remote operation was cancelled.
 
-## Other users and full snapshots
+## Live updates and concurrent editors
 
-Before sending, the app compares the displayed baseline with fresh cached
-channel data. An edit by another client produces a visible conflict instead of
-an automatic overwrite. This is advisory preflight, not atomic server-side
-optimistic concurrency; another writer can still intervene after the check.
-Late replies from a different selected-device generation are ignored. Uncertain
-outcomes remain associated with their original device until recovery.
+The current server publishes cached device membership, control snapshots and
+meters over [Server-Sent Events](LIVE-UPDATES.md). One stream is open per visible
+page. Hidden pages close it; returning or reconnecting obtains fresh cached data.
+The page pauses controls while reconnecting. Polling is only a compatibility
+fallback for a server without the new endpoints. Opening more browsers does not
+add DSP parameter reads or physical meter pollers.
+
+Control snapshots carry a runtime incarnation and monotonic revision. Browser
+preflight checks the draft baseline against a fresh RAM snapshot, then submits
+its strong ETag through `If-Match`. The Java runtime compares the condition
+inside its existing bounded transaction before sending. A stale condition
+returns `412`, `revision_conflict`, `transmitted:false` and current cached state.
+The page shows a conflict and does not automatically overwrite or replay it.
+Independent legacy calls without `If-Match` retain their existing semantics.
+
+Gain previews locally and sends the final release/keyboard value. Only one
+command is pending, with at least 150 ms between new command submissions rather
+than a growing control queue. Pending, ACK, definite rejection, conflict and
+uncertain completion are displayed separately. Late responses cannot replace a
+newer pushed revision; a same-ID replacement gets a new incarnation and clears
+old drafts. Pushed READY cache state cannot clear an uncertain write.
+
+## Full snapshots
 
 A possibly transmitted write makes the full settings snapshot `STALE`, even
 when one field is verified. Controls remain usable after an ACK. **Refresh** is
 an explicit full read of the device settings; ordinary monitoring and control
 do not trigger it. Unknown, uncalibrated and stale levels are labelled clearly.
 
-Each visible browser reads cached meters about every 400 ms and other cached
-state about every 1500 ms, with no overlapping polls. Hidden pages stop polling
-and restart on return. Meter acquisition remains one central server task per
-DSP; opening additional browsers does not add physical meter pollers. SSE and
-a durable multi-user transaction/version protocol remain separate extensions.
+Direct edits made through the device panel or another control program become
+visible when the server actually receives them; this does not introduce periodic
+full DSP dumps. Use explicit Refresh when a fresh physical configuration snapshot
+is required. No new authentication or user roles are included in this increment.
 
 ## Response delivery and timing
 

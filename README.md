@@ -70,6 +70,7 @@ do not contact the physical DSP. In the complete local DSP408 workspace,
 
 - [Install, update and run a service](docs/SERVER-INSTALLATION.md)
 - [Headless server and device registry](docs/HEADLESS-SERVER.md)
+- [Live updates and conditional writes](docs/LIVE-UPDATES.md)
 - [Mobile LAN controller](docs/MOBILE-LAN-APP.md)
 - [Control latency and network-fault evidence](docs/LATENCY-VALIDATION.md)
 - [Firmware-aware parameter API](docs/PARAMETER-API.md)

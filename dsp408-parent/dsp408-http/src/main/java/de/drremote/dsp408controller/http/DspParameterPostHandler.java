@@ -43,12 +43,18 @@ final class DspParameterPostHandler {
             if (key != null && !key.matches("[A-Za-z0-9._~-]{16,128}")) {
                 throw new IllegalArgumentException("Idempotency-Key must contain 16 to 128 safe ASCII token characters.");
             }
+            String condition = condition(request);
             ParameterWriteRequestDto write = readRequest(request);
             boolean interactive = interactive(request.getHeader("Prefer"));
-            DspParameterRequestCache.WriteOperation operation = () -> interactive
-                    ? dsp.writeParameterInteractive(write) : dsp.writeParameter(write);
+            DspParameterRequestCache.WriteOperation operation = () -> condition != null
+                    ? dsp.writeParameterConditional(write, condition, interactive)
+                    : interactive ? dsp.writeParameterInteractive(write) : dsp.writeParameter(write);
+            // Instance identity is stable across revisions; sampling it never
+            // evaluates the condition or transmits a command. Replays bypass the
+            // operation (and its comparison) even after the original ACK.
+            String instanceId = condition == null || key == null ? null : dsp.getControlState().instanceId();
             ParameterWriteResultDto result = key == null ? operation.execute()
-                    : requests.execute(key, dsp.dspId(), dsp, write, operation);
+                    : requests.execute(key, dsp.dspId(), dsp, instanceId, condition, write, operation);
             setTiming(response, started);
             responses.writeJson(response, httpStatus(result), result);
         } catch (Exception | Error failure) {
@@ -56,6 +62,23 @@ final class DspParameterPostHandler {
             throw failure;
         }
         return true;
+    }
+
+    private static String condition(HttpServletRequest request) {
+        String value = request.getHeader("If-Match");
+        if (value == null) return null;
+        // Exactly one strong entity tag; wildcard, weak tags and lists do not
+        // identify the cached revision the caller actually reviewed.
+        if (!value.matches("\"[\\x21\\x23-\\x7E\\x80-\\xFF]*\"")) {
+            throw new IllegalArgumentException("If-Match must contain one exact quoted strong control state tag.");
+        }
+        var headers = request.getHeaders("If-Match");
+        if (headers != null) {
+            if (!headers.hasMoreElements() || !value.equals(headers.nextElement()) || headers.hasMoreElements()) {
+                throw new IllegalArgumentException("Only one If-Match control state tag is accepted.");
+            }
+        }
+        return value;
     }
 
     private static boolean interactive(String prefer) {

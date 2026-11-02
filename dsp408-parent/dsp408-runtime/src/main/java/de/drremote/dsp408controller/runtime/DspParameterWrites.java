@@ -8,6 +8,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 import de.drremote.dsp408.api.ParameterReadbackDto;
 import de.drremote.dsp408.api.ParameterWriteRequestDto;
@@ -30,24 +31,37 @@ final class DspParameterWrites {
     private final DspController controller;
     private final DspTransactionCoordinator transactions;
     private final Supplier<String> dspId;
+    private final UnaryOperator<ParameterWriteResultDto> completed;
     private final Semaphore admission = new Semaphore(MAX_ADMITTED_OPERATIONS);
 
     DspParameterWrites(DspController controller, DspTransactionCoordinator transactions,
             Supplier<String> dspId) {
+        this(controller, transactions, dspId, UnaryOperator.identity());
+    }
+
+    DspParameterWrites(DspController controller, DspTransactionCoordinator transactions,
+            Supplier<String> dspId, UnaryOperator<ParameterWriteResultDto> completed) {
+        this.completed = Objects.requireNonNull(completed);
         this.controller = Objects.requireNonNull(controller);
         this.transactions = Objects.requireNonNull(transactions);
         this.dspId = Objects.requireNonNull(dspId);
     }
 
     ParameterWriteResultDto write(ParameterWriteRequestDto request) {
-        return write(request, false);
+        return write(request, false, () -> { });
     }
 
     ParameterWriteResultDto writeInteractive(ParameterWriteRequestDto request) {
-        return write(request, true);
+        return write(request, true, () -> { });
     }
 
-    private ParameterWriteResultDto write(ParameterWriteRequestDto request, boolean interactive) {
+    ParameterWriteResultDto writeConditional(ParameterWriteRequestDto request, boolean interactive,
+            Runnable precondition) {
+        return write(request, interactive, Objects.requireNonNull(precondition));
+    }
+
+    private ParameterWriteResultDto write(ParameterWriteRequestDto request, boolean interactive,
+            Runnable precondition) {
         Operation operation = new Operation(request);
         // Bound callers before the shared transaction monitor as well as the
         // physical queue, including callers waiting behind legacy transactions.
@@ -57,11 +71,30 @@ final class DspParameterWrites {
                     "The parameter operation limit is full (65 admitted writes).");
         }
         try {
-            // Capture identity, preflight and the bound session after admission to
-            // the runtime transaction, so a queued caller cannot use an old target.
+            // Identity, the condition and cache invalidation all run inside the
+            // existing admitted transaction; readers never take this lock.
             return interactive
-                    ? transactions.withMetersPausedInteractive(() -> perform(operation, true))
-                    : transactions.withMetersPaused(() -> perform(operation, false));
+                    ? transactions.withMetersPausedInteractive(() -> completed.apply(
+                            performSafely(operation, true, precondition)))
+                    : transactions.withMetersPaused(() -> completed.apply(
+                            performSafely(operation, false, precondition)));
+        } catch (DspBusyException busy) {
+            operation.dspId = dspId.get();
+            return operation.reject("dsp_busy",
+                    "The interactive write was rejected before transmission: " + busy.getMessage());
+        } catch (RuntimeException failure) {
+            throw failure;
+        } catch (Exception unexpected) {
+            throw new IllegalStateException("Unexpected parameter transaction failure", unexpected);
+        } finally {
+            admission.release();
+        }
+    }
+
+    private ParameterWriteResultDto performSafely(Operation operation, boolean interactive,
+            Runnable precondition) {
+        try {
+            return perform(operation, interactive, precondition);
         } catch (CancellationException superseded) {
             return operation.result(operation.acknowledged ? ParameterWriteStatus.UNCERTAIN
                     : ParameterWriteStatus.REJECTED, operation.acknowledged ? Boolean.TRUE : Boolean.FALSE,
@@ -99,13 +132,15 @@ final class DspParameterWrites {
             throw failure;
         } catch (Exception unexpected) {
             throw new IllegalStateException("Unexpected parameter transaction failure", unexpected);
-        } finally {
-            admission.release();
         }
     }
 
-    private ParameterWriteResultDto perform(Operation operation, boolean interactive) throws IOException {
+    private ParameterWriteResultDto perform(Operation operation, boolean interactive,
+            Runnable precondition) throws IOException {
         operation.dspId = dspId.get();
+        // Report a stale reviewed state even if the connection changed to
+        // offline; a matching condition still receives the usual device gates.
+        precondition.run();
         if (operation.request == null) {
             return operation.reject("invalid_input", "A parameter write request is required.");
         }
@@ -144,6 +179,9 @@ final class DspParameterWrites {
             return operation.reject("session_changed", "The DSP session changed before transmission.");
         }
 
+        // No physical work may occur between the comparison and this bound
+        // session write. Competing participating writers share this transaction.
+        precondition.run();
         operation.attempted = true;
         try {
             if (interactive) session.writeInteractive(channel, parameter, operation.normalizedValue);

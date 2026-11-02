@@ -33,6 +33,122 @@
     {"name": "debug"}
   ],
   "paths": {
+    "/api/v1/control-state": {
+      "get": {
+        "tags": [
+          "parameters"
+        ],
+        "summary": "Get a versioned cached control snapshot",
+        "description": "RAM-only: no connection, DSP query or readback. Each runtime lifetime has a unique instanceId. Cached control, capability, connection and settings-cache changes advance revision; meter samples do not. The ETag is the exact quoted instanceId.revision used by conditional parameter writes.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ControlStateResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ManagedTargetRequiredResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/dsps/{dspId}/control-state": {
+      "get": {
+        "tags": [
+          "parameters"
+        ],
+        "summary": "Get a versioned cached control snapshot",
+        "description": "RAM-only: no connection, DSP query or readback. Each runtime lifetime has a unique instanceId. Cached control, capability, connection and settings-cache changes advance revision; meter samples do not. The ETag is the exact quoted instanceId.revision used by conditional parameter writes.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ControlStateResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/DeviceNotFoundResponse"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/dspId"
+          }
+        ]
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "dsps",
+          "meters"
+        ],
+        "summary": "Stream shared cached device/control/meter updates",
+        "description": "Server-Sent Events using one connection. Optional dspId selects a concrete runtime; absent dspId subscribes to device-list updates only. Every connection gets fresh cached snapshots; Last-Event-ID does not replay history or commands. Events: devices has the existing /dsps envelope; state has ControlStateDto; meters has {dspId,connected,meters:MeterStateDto}; heartbeat has {serverTimeEpochMs}; removed has {dspId,instanceId,message} and closes the stream on removal/replacement. State instanceId/revision, not event IDs, establish freshness. Shared target sampling is about 200ms, devices about 1s, heartbeat about 10s. Subscriber count and coalesced output are bounded. No DSP reads, connects or refreshes are initiated by subscribing.",
+        "parameters": [
+          {
+            "name": "dspId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Named events with JSON data fields. A reconnect gets current RAM state.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: heartbeat\ndata: {\"serverTimeEpochMs\":1793570000000}\n\n"
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/DeviceNotFoundResponse"
+          },
+          "422": {
+            "description": "Invalid dspId."
+          },
+          "503": {
+            "description": "Subscriber admission limit is full."
+          }
+        },
+        "x-sse-events": {
+          "devices": {
+            "$ref": "#/components/schemas/Object"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ControlStateDto"
+          },
+          "meters": {
+            "$ref": "#/components/schemas/MeterStateDto"
+          },
+          "heartbeat": {
+            "type": "object",
+            "properties": {
+              "serverTimeEpochMs": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          "removed": {
+            "type": "object",
+            "properties": {
+              "dspId": {
+                "type": "string"
+              },
+              "instanceId": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/capabilities": {
       "get": {
         "tags": [
@@ -56,7 +172,7 @@
           "parameters"
         ],
         "summary": "Write one parameter with an explicit acknowledgement/readback outcome",
-        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes. Normal browser control explicitly sets verify=false. Prefer: wait=0 requests interactive admission. Idempotency-Key protects transport duplicates within this process and retention window. Explicit foreign-Origin browser writes return 403.",
+        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes. Normal browser control explicitly sets verify=false. Prefer: wait=0 requests interactive admission. Idempotency-Key protects transport duplicates within this process and retention window. Optional If-Match accepts one exact strong quoted control-state ETag and compares it atomically inside the admitted runtime transaction immediately before transmission. A mismatch returns 412 with transmitted=false and the current cached snapshot. Missing If-Match preserves legacy behavior. Same-key retries replay the original outcome before evaluating the condition again; changing body, condition, target id, concrete service identity or runtime instance conflicts. Explicit foreign-Origin browser writes return 403.",
         "requestBody": {
           "$ref": "#/components/requestBodies/ParameterWriteBody"
         },
@@ -66,6 +182,9 @@
           },
           "400": {
             "$ref": "#/components/responses/ParameterWriteInvalidJsonResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ControlRevisionConflictResponse"
           },
           "409": {
             "$ref": "#/components/responses/ParameterWriteConflictResponse"
@@ -89,6 +208,9 @@
           },
           {
             "$ref": "#/components/parameters/parameterRequestKey"
+          },
+          {
+            "$ref": "#/components/parameters/controlStateCondition"
           }
         ]
       }
@@ -121,7 +243,7 @@
           "parameters"
         ],
         "summary": "Write one parameter with an explicit acknowledgement/readback outcome",
-        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes. Normal browser control explicitly sets verify=false. Prefer: wait=0 requests interactive admission. Idempotency-Key protects transport duplicates within this process and retention window. Explicit foreign-Origin browser writes return 403.",
+        "description": "verify defaults to true. Readback support is checked before sending. VERIFIED requires a fresh receive revision and a match to normalizedValue. FIR408 mute readback is observed only for InD and Out8; other channels require verify=false. Request IDs correlate results and are not idempotency keys. Existing typed control endpoints retain their response shapes. Normal browser control explicitly sets verify=false. Prefer: wait=0 requests interactive admission. Idempotency-Key protects transport duplicates within this process and retention window. Optional If-Match accepts one exact strong quoted control-state ETag and compares it atomically inside the admitted runtime transaction immediately before transmission. A mismatch returns 412 with transmitted=false and the current cached snapshot. Missing If-Match preserves legacy behavior. Same-key retries replay the original outcome before evaluating the condition again; changing body, condition, target id, concrete service identity or runtime instance conflicts. Explicit foreign-Origin browser writes return 403.",
         "requestBody": {
           "$ref": "#/components/requestBodies/ParameterWriteBody"
         },
@@ -131,6 +253,9 @@
           },
           "400": {
             "$ref": "#/components/responses/ParameterWriteInvalidJsonResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ControlRevisionConflictResponse"
           },
           "409": {
             "$ref": "#/components/responses/ParameterWriteConflictResponse"
@@ -160,6 +285,9 @@
           },
           {
             "$ref": "#/components/parameters/parameterRequestKey"
+          },
+          {
+            "$ref": "#/components/parameters/controlStateCondition"
           }
         ]
       }
@@ -417,6 +545,16 @@
   },
   "components": {
     "parameters": {
+      "controlStateCondition": {
+        "name": "If-Match",
+        "in": "header",
+        "required": false,
+        "description": "One exact quoted strong ETag returned by GET /control-state. No wildcard, weak tag or list. The condition is checked after bounded transaction admission, immediately before transmission. Missing header keeps legacy writes.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "\"f47ac10b-58cc-4372-a567-0e02b2c3d479.7\""
+      },
       "dspId": {"name": "dspId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]*$"}, "description": "Configured DSP id, for example main, fir1 or room2"},
       "channelId": {"name": "channelId", "in": "path", "required": true, "schema": {"type": "string"}, "description": "ina, inb, inc, ind, out1..out8 or accepted core aliases"},
       "peqIndex": {"name": "peqIndex", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 9}},
@@ -437,7 +575,7 @@
         "name": "Idempotency-Key",
         "in": "header",
         "required": false,
-        "description": "Process-local duplicate delivery protection. Same key/body/ID/concrete service identity reuses the result or exception. Replacing a device with the same ID conflicts with the old key; it cannot replay an old ACK or execute on the replacement. Up to 4096 entries; completed entries expire after two minutes, active entries do not expire. Restart ends protection. Changed body/target conflicts.",
+        "description": "Process-local duplicate delivery protection. Same key/body/If-Match/ID/concrete service identity/runtime instance reuses the result or exception before reevaluating the condition. Replacing a device with the same ID conflicts with the old key; it cannot replay an old ACK or execute on the replacement. Up to 4096 entries; completed entries expire after two minutes, active entries do not expire. Restart ends protection. Changed body/condition/target conflicts.",
         "schema": {
           "type": "string",
           "minLength": 16,
@@ -502,6 +640,42 @@
       }
     },
     "responses": {
+      "ControlStateResponse": {
+        "description": "Cached snapshot with a strong instance/revision ETag.",
+        "headers": {
+          "ETag": {
+            "description": "Exact quoted runtime instanceId.revision.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ControlStateDto"
+            }
+          }
+        }
+      },
+      "ControlRevisionConflictResponse": {
+        "description": "Definitely unsent revision conflict. Review the returned current state; never retry automatically with a new condition.",
+        "headers": {
+          "ETag": {
+            "description": "Current cached snapshot tag.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ControlRevisionConflict"
+            }
+          }
+        }
+      },
       "ParameterCapabilitiesResponse": {
         "description": "RAM-only capabilities and mapping evidence for the selected DSP. Older providers return unavailable capabilities.",
         "content": {
@@ -993,6 +1167,162 @@
       }
     },
     "schemas": {
+      "ControlStateDto": {
+        "type": "object",
+        "required": [
+          "dspId",
+          "instanceId",
+          "revision",
+          "connected",
+          "channels",
+          "capabilities",
+          "settingsCache"
+        ],
+        "properties": {
+          "dspId": {
+            "type": "string"
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "Unique UUID for this concrete runtime lifetime; replacement invalidates drafts."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Monotonic cached control revision within this runtime; independent of meter updates."
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelDto"
+            }
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/CapabilitiesDto"
+          },
+          "settingsCache": {
+            "$ref": "#/components/schemas/SettingsCacheDto"
+          }
+        }
+      },
+      "ChannelDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "gainDb": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "delayMs": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "muted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "phaseInverted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "gainConfirmedFromDevice": {
+            "type": "boolean"
+          },
+          "gainDirty": {
+            "type": "boolean"
+          },
+          "lastGainUpdateSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "muteConfirmedFromDevice": {
+            "type": "boolean"
+          },
+          "muteDirty": {
+            "type": "boolean"
+          },
+          "lastMuteUpdateSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phaseConfirmedFromDevice": {
+            "type": "boolean"
+          },
+          "phaseDirty": {
+            "type": "boolean"
+          },
+          "lastPhaseUpdateSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delayConfirmedFromDevice": {
+            "type": "boolean"
+          },
+          "delayDirty": {
+            "type": "boolean"
+          },
+          "lastDelayUpdateSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ControlRevisionConflict": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error",
+          "errorCode",
+          "message",
+          "transmitted",
+          "current"
+        ],
+        "properties": {
+          "error": {
+            "const": "conflict"
+          },
+          "errorCode": {
+            "const": "revision_conflict"
+          },
+          "message": {
+            "type": "string"
+          },
+          "transmitted": {
+            "const": false
+          },
+          "current": {
+            "$ref": "#/components/schemas/ControlStateDto"
+          }
+        }
+      },
       "CapabilitiesDto": {
         "type": "object",
         "required": [

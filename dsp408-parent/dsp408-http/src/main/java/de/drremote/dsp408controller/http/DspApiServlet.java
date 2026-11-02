@@ -1,6 +1,7 @@
 package de.drremote.dsp408controller.http;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
 
 import org.osgi.service.component.annotations.Activate;
@@ -16,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 
 import de.drremote.dsp408.api.DspService;
+import de.drremote.dsp408.api.DspControlConflictException;
 import de.drremote.dsp408.api.DspDeviceNotFoundException;
 import de.drremote.dsp408.api.DspDeviceStorageException;
 import javax.servlet.ServletException;
@@ -176,6 +178,14 @@ public final class DspApiServlet extends HttpServlet {
             sendError(resp, 503, "dsp_overloaded", e.getMessage());
         } catch (UnsupportedOperationException e) {
             sendError(resp, 409, "unsupported_operation", e.getMessage());
+        } catch (DspControlConflictException e) {
+            resp.setHeader("ETag", e.currentState().etag());
+            writeJson(resp, 412, Map.of(
+                    "error", "conflict",
+                    "errorCode", "revision_conflict",
+                    "message", e.getMessage(),
+                    "transmitted", false,
+                    "current", e.currentState()));
         } catch (IllegalStateException e) {
             sendError(resp, 409, "conflict", e.getMessage());
         } catch (IllegalArgumentException e) {

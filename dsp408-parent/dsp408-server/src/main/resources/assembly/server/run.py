@@ -3,11 +3,14 @@
 import sys
 sys.dont_write_bytecode = True
 import argparse
+import errno
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
+import time
 from common import (DeploymentError, atomic_write, check_layout, ensure_directory, load_settings,
                     lock_file, ordinary_file, prepare_state, safe_path, verify_release)
 
@@ -39,6 +42,30 @@ def java_environment(env):
         raise DeploymentError('Java 21 or newer is required')
     env.update(JAVA=java, JAVA_HOME=str(Path(java).parent.parent), JAVA_OPTS='-Djava.awt.headless=true',
                EXTRA_JAVA_OPTS='-Djava.awt.headless=true')
+
+
+def wait_for_listeners(addresses):
+    # A user service can start before DHCP assigns its configured LAN address.
+    # Pax Web otherwise keeps the JVM alive after a failed multi-address bind.
+    deadline = time.monotonic() + 30
+    announced = False
+    while True:
+        try:
+            for address in addresses:
+                family = socket.AF_INET6 if ':' in address else socket.AF_INET
+                with socket.socket(family, socket.SOCK_STREAM) as probe:
+                    probe.bind((address, 0))
+            return
+        except OSError as exc:
+            if exc.errno != errno.EADDRNOTAVAIL:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DeploymentError('Configured listen address is unavailable: ' + address) from exc
+            if not announced:
+                print('dsp408-server: waiting for configured listen addresses', file=sys.stderr, flush=True)
+                announced = True
+            time.sleep(min(.25, remaining))
 
 
 def prepare_runtime(release, state, meta, settings):
@@ -73,7 +100,7 @@ def prepare_runtime(release, state, meta, settings):
     properties(etc / 'org.ops4j.pax.web.cfg', {
         'org.osgi.service.http.port': settings['httpPort'],
         'org.ops4j.pax.web.listening.addresses': ','.join(settings['listenAddresses'])})
-    properties(etc / 'de.drremote.dsp408.web.cfg', {'enabled': 'false'})
+    properties(etc / 'de.drremote.dsp408.web.cfg', {'enabled': str(settings.get('webEnabled', False)).lower()})
     properties(etc / 'org.ops4j.pax.url.mvn.cfg', {
         'org.ops4j.pax.url.mvn.offline': 'true',
         'org.ops4j.pax.url.mvn.localRepository': ensure_directory(runtime / 'maven-cache'),
@@ -106,6 +133,7 @@ def main():
         settings = load_settings(state)
         env = clean_environment()
         java_environment(env)
+        wait_for_listeners(settings['listenAddresses'])
         runtime, etc, data = prepare_runtime(release, state, meta, settings)
         env.update(KARAF_HOME=str(release), KARAF_BASE=str(runtime), KARAF_ETC=str(etc),
                    KARAF_DATA=str(data), KARAF_LOG=str(state / 'log'), KARAF_EXEC='exec',

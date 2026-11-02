@@ -18,7 +18,7 @@ ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,159}\Z')
 SHA = re.compile(r'[0-9a-f]{64}\Z')
 REV = re.compile(r'(?:[0-9a-f]{40}|unknown)\Z')
 DEFAULT_SETTINGS = {'schemaVersion': 1, 'listenAddresses': ['127.0.0.1'],
-                    'httpPort': 8181, 'meterPollIntervalMs': 200}
+                    'httpPort': 8181, 'meterPollIntervalMs': 200, 'webEnabled': False}
 
 
 def read_json(path, label):
@@ -317,4 +317,6 @@ def load_settings(state):
             ipaddress.ip_address(address)
     except ValueError as exc:
         raise DeploymentError('Settings listenAddresses must contain literal IP addresses') from exc
+    if type(settings.get('webEnabled', False)) is not bool:
+        raise DeploymentError('Settings webEnabled must be a JSON boolean')
     return settings

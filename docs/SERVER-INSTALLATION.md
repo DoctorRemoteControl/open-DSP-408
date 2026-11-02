@@ -64,15 +64,24 @@ Use literal local IPv4/IPv6 bind addresses in `config/server.json`, for example:
   "schemaVersion": 1,
   "listenAddresses": ["127.0.0.1", "192.168.0.101"],
   "httpPort": 8182,
-  "meterPollIntervalMs": 200
+  "meterPollIntervalMs": 200,
+  "webEnabled": false
 }
 ```
 
-Default bind is `127.0.0.1`, port `8181`. A listener change takes effect after
+Set `webEnabled:true` to serve the mobile interface at `/app/`; omitted or false
+keeps the installed server API-only. SSE remains available independently of the
+interface. Default bind is `127.0.0.1`, port `8181`. A listener change takes effect after
 restart. Invalid configuration fails startup. The launcher regenerates Karaf's
 runtime-specific `etc` from the selected release and these settings; edit this
 persistent JSON rather than generated Karaf files. Device auto-connect belongs
 to each API registration, not to the server listener settings.
+
+At boot the launcher waits up to 30 seconds for every configured local address to
+be bindable. If an address remains absent it exits with an error, allowing the
+generated service to retry. This avoids leaving a running JVM with a failed HTTP
+listener when DHCP is slower than the user service startup. The probe uses an
+ephemeral port; it does not reserve the configured HTTP port.
 
 Foreground operation is useful for diagnosis:
 

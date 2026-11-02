@@ -1,9 +1,10 @@
-import { DspSession, fieldView, meterReading, gainValueAt, nextGainValue } from './model.mjs';
+import { DspSession, LiveUpdates, fieldView, meterReading, gainValueAt, nextGainValue } from './model.mjs';
 
 const session=new DspSession();
 const $=id=>document.getElementById(id);
 const cards=new Map(), drafts=new Map(), baselines=new Map();
-let structure='',filter='all',snapshotTimer,meterTimer,lastDeviceRead=0,pollingEpoch=0;
+let structure='',filter='all',restoreFocus=null;
+const updates=new LiveUpdates(session);
 const names={gain:'Gain',mute:'Mute',phase:'Phase',delay:'Delay'};
 const text=(element,value)=>{if(element.textContent!==String(value))element.textContent=String(value);};
 const format=(value,digits=1)=>typeof value==='number'&&Number.isFinite(value)?value.toFixed(digits).replace('-','−'):'—';
@@ -85,7 +86,7 @@ function renderCard(id) {
   const channel=session.channel(id);const query=selector=>card.querySelector(selector);
   const pending=session.pending?.channelId===id&&session.pending.deviceId===session.deviceId;
   card.classList.toggle('pending',pending);card.setAttribute('aria-busy',String(pending));
-  const level=meterReading(session.meters?{...session.meters,connected:session.connected&&session.serverReachable}:null,id);
+  const level=meterReading(session.meters?{...session.meters,connected:session.connected&&session.serverReachable&&session.snapshotHealthy}:null,id);
   card.classList.toggle('meter-stale',!level.fresh);
   query('.level-meter').value=level.value??-60;
   text(query('.meter-number'),`${format(level.value)} dB`);
@@ -114,6 +115,7 @@ function renderCard(id) {
   let message,tone='';
   const outcome=session.lastResult;
   if(pending)message=`${names[session.pending.parameter]} · waiting for device response…`;
+  else if(session.conflict?.channelId===id){message=`${names[session.conflict.parameter]} conflict · draft ${format(session.conflict.value)} · current ${format(session.conflict.current)} · review before sending`;tone='error';}
   else if(outcome?.channelId===id) {
     message=`${names[outcome.parameter]} · ${{VERIFIED:'read back',ACKNOWLEDGED:'ACK received',REJECTED:'not sent',UNCERTAIN:'outcome unknown'}[outcome.status]}`;
     if(outcome.status==='VERIFIED'||outcome.status==='ACKNOWLEDGED')message+=` · ${typeof outcome.normalizedValue==='boolean'?(outcome.normalizedValue?'on':'off'):format(outcome.normalizedValue,outcome.parameter==='delay'?3:1)}`;
@@ -138,6 +140,8 @@ function render() {
   text($('device-address'),device?`${device.ip}:${device.port}`:'No device selected');
   text($('server-status'),session.serverReachable?'Server online':session.devices.length?'Server unreachable':'Finding server');
   $('server-status').className=`connection-pill ${session.serverReachable?'online':'offline'}`;
+  text($('live-status'),({live:'Live updates',connecting:'Connecting live updates…',reconnecting:'Reconnecting · controls paused',paused:'Updates paused',fallback:'Polling compatibility',idle:'Waiting for updates'})[session.streamStatus]);
+  $('live-status').className=`live-status ${session.streamStatus}`;
   text($('device-status'),session.actionBusy?'Working…':session.connected?'Connected':'Disconnected');
   $('device-status').className=session.connected?'ready':'';
   text($('firmware'),session.capabilities?.deviceVersion||'Not identified');
@@ -169,6 +173,10 @@ function render() {
   const timing=session.lastInteractionTiming;
   text($('timing-status'),timing?`Last change: ${Math.round(timing.totalMs)} ms${timing.backendMs===null?'':` · server ${Math.round(timing.backendMs)} ms`}`:'');
   $('timing-status').title='Total includes browser, network and response handling. Server time includes queueing and the DSP; their difference is not a pure Wi-Fi measurement.';
+  if(restoreFocus) {
+    if(restoreFocus.generation!==session.generation||document.activeElement!==document.body)restoreFocus=null;
+    else if(restoreFocus.element.isConnected&&!restoreFocus.element.disabled){restoreFocus.element.focus({preventScroll:true});restoreFocus=null;}
+  }
   text($('footer-status'),session.connected?`${session.deviceId} · ${cards.size} channels · local network`:'Local network · device disconnected');
 }
 
@@ -176,34 +184,21 @@ async function submit(id,parameter,value,baseline) {
   const focused=document.activeElement,generation=session.generation;
   try {await session.write(id,parameter,value,baseline);}catch(error){failure(error);}
   finally{
-    drafts.delete(`${id}:${parameter}`);baselines.delete(`${id}:${parameter}`);render();
+    drafts.delete(`${id}:${parameter}`);baselines.delete(`${id}:${parameter}`);
+    if(generation===session.generation&&document.activeElement===document.body&&focused?.isConnected)restoreFocus={element:focused,generation};
+    render();
     if(generation===session.generation&&document.activeElement===document.body&&focused?.isConnected&&!focused.disabled)focused.focus({preventScroll:true});
   }
 }
-async function readSnapshot(epoch) {
-  if(document.hidden||epoch!==pollingEpoch)return;
-  try {
-    if(!session.deviceId||Date.now()-lastDeviceRead>10000){await session.loadDevices();lastDeviceRead=Date.now();}
-    await session.pollSnapshot();
-  } catch { /* The model publishes its connection/error state. */ }
-  finally{if(!document.hidden&&epoch===pollingEpoch)snapshotTimer=setTimeout(()=>readSnapshot(epoch),1500);}
-}
-async function readMeters(epoch) {
-  if(document.hidden||epoch!==pollingEpoch)return;
-  try{await session.pollMeters();}catch{/* The next bounded poll can recover; writes are never retried. */}
-  finally{if(!document.hidden&&epoch===pollingEpoch)meterTimer=setTimeout(()=>readMeters(epoch),400);}
-}
-function stopPolling(){pollingEpoch++;clearTimeout(snapshotTimer);clearTimeout(meterTimer);}
-function startPolling(){stopPolling();const epoch=pollingEpoch;void readSnapshot(epoch);void readMeters(epoch);}
-$('device-select').addEventListener('change',()=>{session.selectDevice($('device-select').value);startPolling();});
+$('device-select').addEventListener('change',()=>session.selectDevice($('device-select').value));
 $('connection-button').addEventListener('click',()=>{void session.connection(session.connected?'disconnect':'connect').catch(failure);});
 $('refresh-button').addEventListener('click',()=>{void session.refreshDevice().catch(failure);});
 $('verify-changes').addEventListener('change',()=>session.setVerification($('verify-changes').checked));
-$('retry-button').addEventListener('click',()=>{lastDeviceRead=0;startPolling();});
+$('retry-button').addEventListener('click',()=>updates.start());
 for(const button of document.querySelectorAll('[data-filter]'))button.addEventListener('click',()=>{
   filter=button.dataset.filter;for(const tab of document.querySelectorAll('[data-filter]'))tab.setAttribute('aria-pressed',String(tab===button));render();
 });
-document.addEventListener('visibilitychange',()=>{if(document.hidden)stopPolling();else startPolling();});
-window.addEventListener('pagehide',stopPolling);
-window.addEventListener('pageshow',event=>{if(event.persisted)startPolling();});
-session.subscribe(render);render();startPolling();
+document.addEventListener('visibilitychange',()=>{if(document.hidden)updates.stop();else updates.start();});
+window.addEventListener('pagehide',()=>updates.stop());
+window.addEventListener('pageshow',event=>{if(event.persisted)updates.start();});
+session.subscribe(render);render();updates.start();
